@@ -1,4 +1,4 @@
-//SEARCH FUNCTION FOR ADD AND FAV NOT WORKING, check uncheck no visual cue
+// chatbot header too big. try center setting options, change font of settings text
 
 import 'package:Talipapa/tutorial_overlay.dart';
 import 'package:flutter/material.dart';
