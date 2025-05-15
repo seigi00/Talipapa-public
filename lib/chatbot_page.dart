@@ -40,7 +40,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: PreferredSize(
-        preferredSize: Size.fromHeight(100), // Increased header height
+        preferredSize: Size.fromHeight(120), // Adjusted height to match or slightly exceed main.dart
         child: AppBar(
           backgroundColor: kGreen,
           title: Column(
@@ -51,7 +51,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
                 height: 28,
                 colorFilter: ColorFilter.mode(kBlue, BlendMode.srcIn),
               ), // Fish icon
-              SizedBox(height: 8), // Increased spacing
+              SizedBox(height: 12), // Increased spacing to prevent overlap
               Text(
                 "Talipapa Chat",
                 style: TextStyle(

@@ -22,14 +22,22 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
   @override
   void initState() {
     super.initState();
-    _loadPreference();
+    if (!widget.showFromSettings) {
+      _loadPreference();
+    }
   }
 
   Future<void> _loadPreference() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      dontShowAgain = prefs.getBool('skipLaunchTutorial') ?? false;
-    });
+    final skipTutorial = prefs.getBool('skipLaunchTutorial') ?? false;
+
+    if (!skipTutorial || widget.showFromSettings) {
+      setState(() {
+        dontShowAgain = skipTutorial; // Reflect the preference in the checkbox
+      });
+    } else {
+      widget.onClose(); // Automatically close if the preference is set
+    }
   }
 
   @override

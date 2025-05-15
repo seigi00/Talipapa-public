@@ -82,7 +82,7 @@ class _SettingsPageState extends State<SettingsPage> {
         title: Center( // Center the "Settings" header horizontally
           child: Text(
             "Settings",
-            style: TextStyle(color: textColor, fontSize: 24, fontWeight: FontWeight.bold),
+            style: TextStyle(color: textColor, fontFamily: 'CourierPrime', fontSize: 24, fontWeight: FontWeight.bold),
           ),
         ),
       ),

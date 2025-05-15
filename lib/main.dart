@@ -16,8 +16,7 @@ import 'image_mapping.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  runApp(MyApp());
+  await Firebase.initializeApp();  runApp(MyApp());
 }
 
 class MyApp extends StatelessWidget {
@@ -52,7 +51,7 @@ class _HomePageState extends State<HomePage> {
   String searchText = "";
   bool isSearching = false; // Track whether the search bar is active
   static bool _hasShownTutorial = false; // Static variable to persist across widget rebuilds
-  bool showTutorial = false;
+  bool showTutorial = false; // Ensure this is properly initialized
   int? selectedIndex;
   String? selectedSort;
   String? selectedFilter;
@@ -82,18 +81,23 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _checkFirstLaunch() async {
-    // If we've already shown the tutorial this session, don't show it again
-    if (_hasShownTutorial) return;
+    if (_hasShownTutorial) return; // Prevent showing multiple times in one session
 
     final prefs = await SharedPreferences.getInstance();
-    bool shouldShowTutorial = prefs.getBool('showTutorial') ?? true;
+    bool skipTutorial = prefs.getBool('skipLaunchTutorial') ?? false;
 
-    if (mounted && shouldShowTutorial) {
+    if (!skipTutorial) {
       setState(() {
         showTutorial = true;
-        _hasShownTutorial = true; // Mark tutorial as shown for this session
+        _hasShownTutorial = true; // Mark as shown for this session
       });
     }
+  }
+
+  void _closeTutorial() {
+    setState(() {
+      showTutorial = false;
+    });
   }
 
   @override
@@ -487,16 +491,26 @@ class _HomePageState extends State<HomePage> {
                             fontSize: 14,
                           ),
                         ),
-                        SizedBox(height: 8),
+                        SizedBox(width: 8), // Space after "See:"
                         Expanded(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: kDivider), // Add border instead of shadow
+                            ),
                             child: Row(
                               children: [
-                                _forecastButton("One Week"),
-                                _forecastButton("Two Weeks"),
-                                _forecastButton("One Month"),
-                                _forecastButton("Two Months"),
+                                Expanded(
+                                  child: _forecastButton("One Week", height: 24),
+                                ),
+                                Container(
+                                  width: 1, // Divider width
+                                  color: kDivider, // Divider color
+                                ),
+                                Expanded(
+                                  child: _forecastButton("Two Weeks", height: 24),
+                                ),
                               ],
                             ),
                           ),
@@ -742,11 +756,7 @@ class _HomePageState extends State<HomePage> {
             ),
           if (showTutorial)
             TutorialOverlay(
-              onClose: () {
-                setState(() {
-                  showTutorial = false;
-                });
-              },
+              onClose: _closeTutorial, // Ensure the close method is used
             ),
         ],
       ),
@@ -754,17 +764,16 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _forecastButton(String text) {
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 4),
+  Widget _forecastButton(String text, {double height = 24}) {
+    return SizedBox(
+      height: height, // Set height to match "See:"
       child: OutlinedButton(
         style: OutlinedButton.styleFrom(
-          side: BorderSide(color: selectedForecast == text ? kPink : kDivider),
-          backgroundColor: selectedForecast == text ? kPink.withOpacity(0.2) : Colors.transparent,
-          minimumSize: Size(60, 28), // Adjusted size for a sleeker look
-          padding: EdgeInsets.symmetric(horizontal: 8), // Reduced padding
+          side: BorderSide.none, // Remove border
+          backgroundColor: Colors.transparent,
+          padding: EdgeInsets.zero, // Remove extra padding
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16), // Rounded corners
+            borderRadius: BorderRadius.zero, // No border radius
           ),
         ),
         onPressed: () {
@@ -775,8 +784,8 @@ class _HomePageState extends State<HomePage> {
         child: Text(
           text,
           style: TextStyle(
-            color: selectedForecast == text ? kPink : kBlue,
-            fontSize: 12, // Smaller font size
+            color: selectedForecast == text ? kPink : Colors.grey, // Gray for unselected
+            fontSize: 12, // Retain original font size
             fontWeight: FontWeight.w500,
           ),
         ),
