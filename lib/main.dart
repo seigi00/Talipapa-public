@@ -2,22 +2,19 @@
 
 import 'package:Talipapa/tutorial_overlay.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:uuid/uuid.dart';
-import 'dart:math'; // Add import for min function
 // Firestore
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 // Local imports
-import 'chatbot_page.dart';
-import 'settings_page.dart';
 import 'custom_bottom_navbar.dart';
 import 'constants.dart'; // Make sure this contains COMMODITY_ID_TO_NAME
 import 'image_mapping.dart';
 import 'services/firestore_service.dart';
-import 'utils/commodity_debug.dart'; // Add import for debug helper
+import 'utils/debug_helper.dart';
+import 'utils/data_cache.dart';
 import 'package:fl_chart/fl_chart.dart';
 
 void main() async {
@@ -74,7 +71,11 @@ class _HomePageState extends State<HomePage> {
   List<String> displayedCommoditiesIds = []; // <-- Use IDs
   bool isHoldMode = false;
   Set<String> heldCommodities = {};
-  String? deviceUUID;  @override
+  String? deviceUUID;
+  String globalPriceDate = ""; // Store the latest global price date
+  bool _dataInitialized = false; // Track if data has been initialized
+
+  @override
   void initState() {
     super.initState();
     _searchFocusNode.addListener(() {
@@ -84,23 +85,106 @@ class _HomePageState extends State<HomePage> {
         });
       }
     });
-    
-    // Initialize in proper sequence
-    _initializeApp();
+    _initializeUUID();
+    _checkFirstLaunch();
+    loadCachedDataAndFetch();
+    loadDisplayedCommodities();
+    loadFavorites();
+    loadState();
+    _loadSelectedCommodity();
   }
-
-  Future<void> _initializeApp() async {
+  
+  // Load the selected commodity from cache
+  Future<void> _loadSelectedCommodity() async {
     try {
-      await _initializeUUID();
-      await _checkFirstLaunch();
-      await loadDisplayedCommodities(); // Load which commodities to display
-      await loadFavorites(); // Load favorites
-      await loadState(); // Load filter/sort state
-      await fetchCommodities(); // Load actual commodity data
+      final cachedCommodityDetails = await DataCache.getSelectedCommodityDetails();
       
-      print("✅ App initialization complete");
+      if (cachedCommodityDetails != null && cachedCommodityDetails.isNotEmpty) {
+        final commodityId = cachedCommodityDetails['id']?.toString();
+        
+        if (commodityId != null && commodityId.isNotEmpty) {
+          setState(() {
+            selectedCommodityId = commodityId;
+          });
+          print("✅ Loaded selected commodity from cache: $commodityId");
+        }
+      }
     } catch (e) {
-      print("❌ Error during app initialization: $e");
+      print("❌ Error loading selected commodity from cache: $e");
+    }
+  }
+    // Load data from cache and then fetch if needed
+  Future<void> loadCachedDataAndFetch() async {
+    // First try to load from cache for immediate display
+    bool loadedFromCache = await _loadFromCache();
+    
+    // If cache is invalid or empty, fetch from network
+    if (!loadedFromCache) {
+      await fetchCommodities();
+    } else {
+      print("✅ Loaded commodity data from cache");
+      // Perform a background fetch to update cache without blocking UI
+      Future.delayed(Duration.zero, () => fetchCommodities());
+    }
+  }
+  // Load data from cache
+  Future<bool> _loadFromCache() async {
+    try {
+      // Check if cache is valid
+      final isCacheValid = await DataCache.isCacheValid();
+      if (!isCacheValid) {
+        print("🔄 Cache expired or not found, will fetch from network");
+        return false;
+      }
+      
+      // Get data from cache
+      List<dynamic> tempCommodities = await DataCache.getCommodities();
+      List<dynamic> tempFilteredCommodities = await DataCache.getFilteredCommodities();
+      
+      // Convert to the required type
+      List<Map<String, dynamic>> typedCommodities = 
+          tempCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
+      
+      List<Map<String, dynamic>> typedFilteredCommodities = 
+          tempFilteredCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
+      
+      final cachedGlobalPriceDate = await DataCache.getGlobalPriceDate();
+      final cachedForecast = await DataCache.getSelectedForecast();
+      
+      // Validate cached data
+      if (typedCommodities.isEmpty) {
+        print("⚠️ Cached commodities list is empty");
+        return false;
+      }
+      
+      // Set up default values for missing data
+      final effectiveFilteredCommodities = typedFilteredCommodities.isNotEmpty 
+          ? typedFilteredCommodities 
+          : List.from(typedCommodities);
+      
+      final effectiveGlobalPriceDate = cachedGlobalPriceDate.isNotEmpty
+          ? cachedGlobalPriceDate
+          : "";
+      
+      final effectiveForecast = cachedForecast.isNotEmpty
+          ? cachedForecast
+          : "Now";
+      
+      // Update the UI with cached data
+      setState(() {
+        commodities = typedCommodities;
+        filteredCommodities = effectiveFilteredCommodities.cast<Map<String, dynamic>>();
+        globalPriceDate = effectiveGlobalPriceDate;
+        selectedForecast = effectiveForecast;
+      });
+      
+      print("✅ Loaded ${commodities.length} commodities and ${filteredCommodities.length} filtered commodities from cache");
+      print("✅ Using cached forecast period: $selectedForecast");
+      
+      return true;
+    } catch (e) {
+      print("❌ Error loading data from cache: $e");
+      return false;
     }
   }
 
@@ -142,16 +226,31 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       showTutorial = false;
     });
-  }
-
+  }  // Store the last used forecast period to detect changes
+  String _lastUsedForecast = "Now";
+  
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
 
-    // Fetch commodities and repopulate filteredCommodities
-    fetchCommodities();
-
-    // Repopulate filteredCommodities based on the current filter
+    // Only fetch commodities when needed:
+    // 1. First load (_dataInitialized is false)
+    // 2. When forecast period changes (_lastUsedForecast != selectedForecast)
+    if (!_dataInitialized || _lastUsedForecast != selectedForecast) {
+      print("🔄 Fetching data: ${!_dataInitialized ? 'First load' : 'Forecast changed from $_lastUsedForecast to $selectedForecast'}");
+      
+      // Fetch commodities and repopulate filteredCommodities
+      fetchCommodities();
+      _dataInitialized = true;
+      _lastUsedForecast = selectedForecast;
+    } else {
+      // Just apply filter without fetching from Firestore
+      _applyFiltersOnly();
+    }
+  }
+  // Apply filters without fetching data from Firestore
+  void _applyFiltersOnly() {
+    print("🔍 Applying filters to existing data without Firestore fetch");
     setState(() {
       if (selectedFilter == "None" || selectedFilter == null) {
         filteredCommodities = List.from(commodities);
@@ -172,286 +271,162 @@ class _HomePageState extends State<HomePage> {
           return category.toLowerCase() == selectedFilter?.toLowerCase();
         }).toList();
       }
+      
+      // Apply sorting if necessary
+      _applySorting();
+      
+      // Cache the filtered result
+      DataCache.saveFilteredCommodities(filteredCommodities);
     });
-  }  // Fetch commodities from Firestore
+  }
+  
+  // Apply sorting to the filtered list
+  void _applySorting() {
+    if (selectedSort == "Name") {
+      filteredCommodities.sort((a, b) {
+        final nameA = COMMODITY_ID_TO_DISPLAY[a['id'].toString()]?['display_name'] ?? "";
+        final nameB = COMMODITY_ID_TO_DISPLAY[b['id'].toString()]?['display_name'] ?? "";
+        return nameA.compareTo(nameB);
+      });
+    } else if (selectedSort == "Price (Low to High)") {
+      filteredCommodities.sort((a, b) {
+        double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
+        double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
+        return priceA.compareTo(priceB);
+      });
+    } else if (selectedSort == "Price (High to Low)") {
+      filteredCommodities.sort((a, b) {
+        double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
+        double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
+        return priceB.compareTo(priceA);
+      });
+    }
+  }// Fetch commodities from Firestore
   Future<void> fetchCommodities() async {
     try {
       print("🔄 Fetching commodities from Firestore...");
       
-      // First, ensure displayedCommoditiesIds is properly initialized
-      if (displayedCommoditiesIds.isEmpty) {
-        print("⚠️ displayedCommoditiesIds is empty, initializing...");
-        await _initializeWithAllCommodities();
-      }
-
+      // STEP 1: Get the latest global price date
+      final globalDateInfo = await firestoreService.fetchLatestGlobalPriceDate();
+      final String formattedGlobalDate = globalDateInfo['formattedDate'] ?? "";
+      globalPriceDate = formattedGlobalDate; // Store for use in UI
+      
+      // STEP 2: Get all the latest prices in a single batch for all commodities
+      print("🔄 Fetching all latest prices in one batch...");
+      final allLatestPrices = await firestoreService.fetchAllLatestPrices(forecastPeriod: selectedForecast);
+      print("✅ Fetched latest prices for ${allLatestPrices.length} commodities (Forecast: $selectedForecast)");
+      
       // Fetch all commodity documents from Firestore
       final querySnapshot = await _firestore.collection('commodities').get();
       final List<Map<String, dynamic>> allCommodities = [];
-      
-      print("✅ Fetched ${querySnapshot.docs.length} commodities from Firestore");
       
       if (querySnapshot.docs.isEmpty) {
         print("⚠️ Warning: No commodities found in Firestore");
         return;
       }
-      
-      // Debug: Print first document
-      if (querySnapshot.docs.isNotEmpty) {
-        final firstDoc = querySnapshot.docs.first;
-        print("🔍 Sample commodity document: ID=${firstDoc.id}, fields=${firstDoc.data().keys.join(', ')}");
-      }
-      
-      // Process each commodity document
+        // Process each commodity document
       for (var doc in querySnapshot.docs) {
         final commodityId = doc.id; // This is the UUID
         final commodityData = doc.data(); // Get the actual document data
-          // Verify if this commodity has display info
-        final hasDisplayData = COMMODITY_ID_TO_DISPLAY.containsKey(commodityId);
-        if (!hasDisplayData) {
-          print("⚠️ Warning: No display data for commodity $commodityId");
-        } else {
-          print("✓ Found display data for commodity $commodityId: ${COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name']}");
-        }
         
         // Create base commodity entry first (in case price fetching fails)
         Map<String, dynamic> commodityEntry = {
           'id': commodityId,
           'weekly_average_price': 0.0,
-          'price_date': 'No data',
+          'price_date': '',  // Empty string instead of 'No data'
+          'is_forecast': false,  // Default to false
           // Add any other fields from the commodity document
           ...commodityData,
         };
         
-        try {
-          // Get the most recent price for this commodity
-          final pricesSnapshot = await _firestore
-              .collection('price_entries') // Make sure this collection name is correct
-              .where('commodity_id', isEqualTo: commodityId)
-              .where('is_forecast', isEqualTo: false)
-              .orderBy('end_date', descending: true)
-              .limit(1)
-              .get();
-        
-          // Add price data if available
-          if (pricesSnapshot.docs.isNotEmpty) {
-            final priceData = pricesSnapshot.docs.first.data();
-            final price = priceData['price'] ?? 0.0;
-          
-            // Format date for display
-            final endDate = priceData['end_date'] as Timestamp?;
-            final formattedDate = endDate != null ? 
-                "${endDate.toDate().month}/${endDate.toDate().day}/${endDate.toDate().year}" : 
-                "No date";
-          
+        try {          // Get price from the batch fetch we did earlier
+          if (allLatestPrices.containsKey(commodityId)) {
+            final latestPriceData = allLatestPrices[commodityId] as Map<String, dynamic>;
+            final price = latestPriceData['price'] ?? 0.0;
+            final formattedDate = latestPriceData['formatted_end_date'] ?? "";
+            final isForecast = latestPriceData['is_forecast'] ?? false;
+            final isGlobalDate = latestPriceData['is_global_date'] ?? false;
+            
+            // Add more specific date tag for forecasts if needed
+            String dateDisplay = formattedDate;
+            if (isForecast && selectedForecast != "Now") {
+              dateDisplay = "$formattedDate (${selectedForecast})";
+            }
+            
             // Update commodity entry with price info
             commodityEntry['weekly_average_price'] = price;
-            commodityEntry['price_date'] = formattedDate;
+            commodityEntry['price_date'] = dateDisplay; // Use enhanced dateDisplay that includes forecast period
+            commodityEntry['is_forecast'] = isForecast;
+            commodityEntry['is_global_date'] = isGlobalDate; // Store whether this price is from the global date
             
-            print("💰 Price data for ${COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? commodityId}: ₱$price ($formattedDate)");
+            print("💰 Price data for ${COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? commodityId}: ₱$price ($formattedDate) ${isForecast ? '(Forecast)' : ''} ${isGlobalDate ? '[GLOBAL DATE]' : ''}");
           } else {
-            print("ℹ️ No price data for commodity $commodityId (${COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? 'Unknown'})");
+            print("ℹ️ No price data found in batch for commodity $commodityId (${COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? 'Unknown'})");
           }
         } catch (e) {
           print("⚠️ Error fetching price for $commodityId: $e");
-          
-          // Display special message if it's a missing index error
-          if (e.toString().contains("requires an index")) {
-            print("📢 IMPORTANT: You need to create a Firestore index for price_entries collection.");
-            print("📢 Please click the link in the error message above or go to Firebase console to create the required index.");
-          }
         }
       
         allCommodities.add(commodityEntry);
       }      setState(() {
-        // First, store all commodities for reference
-        commodities = allCommodities;
-        
-        print("📊 Total commodities from Firestore: ${allCommodities.length}");
-        print("📋 Total displayed IDs: ${displayedCommoditiesIds.length}");
-        
-        // DEBUG: List a few commodity IDs and names to verify data
-        if (allCommodities.isNotEmpty) {
-          print("\n📋 SAMPLE COMMODITIES:");
-          for (int i = 0; i < min(3, allCommodities.length); i++) {
-            final commodity = allCommodities[i];
-            final id = commodity['id'];
-            final displayInfo = COMMODITY_ID_TO_DISPLAY[id];
-            final name = displayInfo?['display_name'] ?? 'Unknown';
-            print("🔹 Commodity #$i: $name (ID: $id)");
-          }
-        }
+        // Store all commodities for reference
+        commodities = allCommodities.where((commodity) {
+          final itemId = commodity['id'].toString();
+          return displayedCommoditiesIds.contains(itemId);
+        }).toList();
 
-        // Check which display IDs exist in our fetched data
-        final Set<String> allCommodityIds = allCommodities.map((c) => c['id'].toString()).toSet();
-        final List<String> missingIds = [];
-        for (String id in displayedCommoditiesIds.take(5)) { // Check first 5
-          if (!allCommodityIds.contains(id)) {
-            missingIds.add(id);
-          }
-        }
-        
-        if (missingIds.isNotEmpty) {
-          print("⚠️ Some display IDs not found in fetched data: ${missingIds.join(', ')}");
-        }
-
-        // Reset filteredCommodities if it's empty or null
-        if (filteredCommodities.isEmpty && allCommodities.isNotEmpty) {
-          filteredCommodities = List.from(allCommodities);
-          print("🔄 Reset filteredCommodities with all commodities");
-        }
-
-        // Make sure favorites are included
         for (String favorite in favoriteCommodities) {
           if (!displayedCommoditiesIds.contains(favorite)) {
             displayedCommoditiesIds.add(favorite);
-            print("⭐ Added favorite $favorite to displayed IDs");
           }
-        }
-
-        // Print out debug info
-        print("📊 All fetched commodities: ${allCommodities.length}");
-        print("📊 Displayed commodities: ${commodities.length}");
-        print("📊 Displayed IDs: ${displayedCommoditiesIds.length}");
+        }        filteredCommodities = _applyFilter(commodities, allCommodities);
         
-        // Sample a few commodities to verify content
-        if (commodities.isNotEmpty) {
-          final sampleCommodity = commodities.first;
-          print("📝 Sample commodity: ID=${sampleCommodity['id']}, Price=${sampleCommodity['weekly_average_price']}");
-        } else {
-          print("⚠️ No commodities to display!");
-        }
-          
-        // Apply filter to update displayed commodities
-        filteredCommodities = _applyFilter(commodities, allCommodities);
-        print("📊 Filtered commodities: ${filteredCommodities.length}");
-        
-        // Log detailed debug info
-        if (commodities.isNotEmpty) {
-          CommodityDebugHelper.logCommodityLoading(
+        // Debug log the commodity data
+        if (kDebugMode) {
+          DebugHelper.printCommodityDebug(
             commodities: commodities,
-            displayedIds: displayedCommoditiesIds,
+            displayedCommoditiesIds: displayedCommoditiesIds,
             filteredCommodities: filteredCommodities,
+            globalPriceDate: globalPriceDate
           );
         }
-        
-        // Force UI update
-        if (mounted) setState(() {});
       });
+      
+      // Cache data after successful fetch
+      await DataCache.saveCommodities(commodities);
+      await DataCache.saveFilteredCommodities(filteredCommodities);
+      await DataCache.saveSelectedForecast(selectedForecast);
+      await DataCache.saveGlobalPriceDate(globalPriceDate);
+      print("✅ Saved commodity data to cache");
     } catch (e) {
       print("❌ Error fetching commodities: $e");
-      // Print stack trace for debugging
-      print(e.toString());
     }
   }
+
   // Load displayed commodities from SharedPreferences
   Future<void> loadDisplayedCommodities() async {
     final prefs = await SharedPreferences.getInstance();
     final storedCommodities = prefs.getStringList('displayedCommodities');
-    
-    // Print debug info
-    print("🔍 Loading displayed commodities from storage: ${storedCommodities?.length ?? 0}");
-    
-    if (storedCommodities != null && storedCommodities.isNotEmpty) {
-      setState(() {
+    setState(() {
+      if (storedCommodities != null) {
         displayedCommoditiesIds = storedCommodities;
-      });
-      
-      // Debug print first few IDs
-      if (displayedCommoditiesIds.isNotEmpty) {
-        final previewIds = displayedCommoditiesIds.take(3).join(", ");
-        print("📋 First 3 IDs: $previewIds");
+        filteredCommodities = commodities
+            .where((commodity) => displayedCommoditiesIds.contains(commodity['id'].toString()))
+            .toList();
       }
-    } else {
-      print("⚠️ No stored commodities found, initializing with all");
-      // If nothing is stored, initialize with all commodity IDs
-      await _initializeWithAllCommodities();
-    }
-  }  // Add this method to initialize with all commodities if empty
-  Future<void> _initializeWithAllCommodities() async {
-    try {
-      print("🔄 Initializing all commodities list...");
-      
-      // Get all commodity IDs from Firestore
-      final querySnapshot = await _firestore.collection('commodities').get();
-      
-      if (querySnapshot.docs.isEmpty) {
-        print("⚠️ No commodities found in Firestore during initialization");
-        return;
-      }
-      
-      // Extract the IDs
-      final allIds = querySnapshot.docs.map((doc) => doc.id).toList();
-      
-      // Store all commodity IDs
-      setState(() {
-        displayedCommoditiesIds = allIds;
-      });
-      
-      // Save this list for next time
-      await saveDisplayedCommodities();
-      
-      print("✅ Initialized with all commodities: ${displayedCommoditiesIds.length}");
-      
-      // Debug print some of the IDs
-      if (displayedCommoditiesIds.isNotEmpty) {
-        final previewIds = displayedCommoditiesIds.take(5).join(", ");
-        print("📋 First 5 commodity IDs: $previewIds");
-        
-        // Verify mapping exists for IDs
-        for (var id in displayedCommoditiesIds.take(5)) {
-          final hasMapping = COMMODITY_ID_TO_DISPLAY.containsKey(id);
-          final name = COMMODITY_ID_TO_DISPLAY[id]?['display_name'] ?? 'Unknown';
-          print("ID: $id, Has mapping: $hasMapping, Name: $name");
-        }
-      }
-    } catch (e) {
-      print("❌ Error initializing commodities: $e");
-      // Print stack trace for debugging
-      print(e.toString());
-    }
-  }  // Save displayed commodities to SharedPreferences
+    });
+  }
+
+  // Save displayed commodities to SharedPreferences
   Future<void> saveDisplayedCommodities() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      
-      // Make sure displayedCommoditiesIds is not null or empty
-      if (displayedCommoditiesIds.isEmpty) {
-        print("⚠️ Warning: No commodities selected to save, initializing with defaults");
-        await _initializeWithAllCommodities();
-        return; // Return to avoid recursion
-      }
-      
-      print("💾 Saving ${displayedCommoditiesIds.length} displayed commodities to preferences");
-      
-      // Check if we're trying to save empty IDs
-      if (displayedCommoditiesIds.any((id) => id.isEmpty)) {
-        print("⚠️ Warning: Some IDs are empty strings! Cleaning up...");
-        displayedCommoditiesIds.removeWhere((id) => id.isEmpty);
-      }
-      
-      await prefs.setStringList('displayedCommodities', displayedCommoditiesIds);
-      
-      // Debug check to verify data was saved
-      final saved = prefs.getStringList('displayedCommodities');
-      print("✅ Verified saved ${saved?.length ?? 0} commodities");
-      
-      if (saved != null && saved.isNotEmpty) {
-        print("💾 First few saved IDs: ${saved.take(3).join(', ')}");
-      }
-    } catch (e) {
-      print("❌ Error saving displayed commodities: $e");
-      print(e.toString());
-    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('displayedCommodities', displayedCommoditiesIds);
   }
 
   Future<void> saveFavorites() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setStringList('favoriteCommodities', favoriteCommodities);
-      print("✅ Favorites saved: ${favoriteCommodities.length} items");
-    } catch (e) {
-      print("❌ Error saving favorites: $e");
-    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('favoriteCommodities', favoriteCommodities);
+    print("Favorites saved: $favoriteCommodities");
   }
 
   Future<void> loadFavorites() async {
@@ -476,56 +451,64 @@ class _HomePageState extends State<HomePage> {
     await prefs.setString('selectedSort', selectedSort ?? "None");
     print("State saved: Filter = $selectedFilter, Sort = $selectedSort");
   }
-
   Future<void> loadState() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      selectedFilter = prefs.getString('selectedFilter') == "None" ? null : prefs.getString('selectedFilter');
-      selectedSort = prefs.getString('selectedSort') == "None" ? null : prefs.getString('selectedSort');
-    });
+    
+    try {
+      setState(() {
+        selectedFilter = prefs.getString('selectedFilter') == "None" ? null : prefs.getString('selectedFilter');
+        selectedSort = prefs.getString('selectedSort') == "None" ? null : prefs.getString('selectedSort');
+      });
 
-    // Apply the loaded filter and sort
-    if (selectedFilter == null) {
-      filteredCommodities = List.from(commodities);
-    } else if (selectedFilter == "Favorites") {
-      // Update the filter logic for "Favorites"
-      filteredCommodities = commodities.where((commodity) {
-        final commodityId = commodity['id'].toString();
-        return favoriteCommodities.contains(commodityId);
-      }).toList();
-    } else {
-      // Update filter logic for commodity types - now using category
-      filteredCommodities = commodities.where((commodity) {
-        final commodityId = commodity['id'].toString();
-        final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
-        if (typeInfo == null) return false;
-        
-        final category = typeInfo['category'] ?? "";
-        return category.toLowerCase() == selectedFilter?.toLowerCase();
-      }).toList();
+      // Apply the loaded filter and sort
+      if (selectedFilter == null) {
+        filteredCommodities = List.from(commodities);
+      } else if (selectedFilter == "Favorites") {
+        // Update the filter logic for "Favorites"
+        filteredCommodities = commodities.where((commodity) {
+          final commodityId = commodity['id'].toString();
+          return favoriteCommodities.contains(commodityId);
+        }).toList();
+      } else {
+        // Update filter logic for commodity types - now using category
+        filteredCommodities = commodities.where((commodity) {
+          final commodityId = commodity['id'].toString();
+          final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
+          if (typeInfo == null) return false;
+          
+          final category = typeInfo['category'] ?? "";
+          return category.toLowerCase() == selectedFilter?.toLowerCase();
+        }).toList();
+      }
+
+      // Apply sort if needed
+      if (selectedSort == "Name") {
+        filteredCommodities.sort((a, b) {
+          final nameA = COMMODITY_ID_TO_DISPLAY[a['id'].toString()]?['display_name'] ?? "";
+          final nameB = COMMODITY_ID_TO_DISPLAY[b['id'].toString()]?['display_name'] ?? "";
+          return nameA.compareTo(nameB);
+        });
+      } else if (selectedSort == "Price (Low to High)") {
+        filteredCommodities.sort((a, b) {
+          double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
+          double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
+          return priceA.compareTo(priceB);
+        });
+      } else if (selectedSort == "Price (High to Low)") {
+        filteredCommodities.sort((a, b) {
+          double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
+          double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
+          return priceB.compareTo(priceA);
+        });
+      }
+      
+      // Cache the filtered and sorted commodities
+      DataCache.saveFilteredCommodities(filteredCommodities);
+
+      print("State loaded: Filter = $selectedFilter, Sort = $selectedSort");
+    } catch (e) {
+      print("Error loading state: $e");
     }
-
-    if (selectedSort == "Name") {
-      filteredCommodities.sort((a, b) {
-        final nameA = COMMODITY_ID_TO_DISPLAY[a['id'].toString()]?['display_name'] ?? "";
-        final nameB = COMMODITY_ID_TO_DISPLAY[b['id'].toString()]?['display_name'] ?? "";
-        return nameA.compareTo(nameB);
-      });
-    } else if (selectedSort == "Price (Low to High)") {
-      filteredCommodities.sort((a, b) {
-        double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
-        double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
-        return priceA.compareTo(priceB);
-      });
-    } else if (selectedSort == "Price (High to Low)") {
-      filteredCommodities.sort((a, b) {
-        double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
-        double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
-        return priceB.compareTo(priceA);
-      });
-    }
-
-    print("State loaded: Filter = $selectedFilter, Sort = $selectedSort");
   }
 
   void showFavoritesDialog() {
@@ -572,7 +555,9 @@ class _HomePageState extends State<HomePage> {
         );
       },
     );
-  }  void showAddDialog() {
+  }
+
+  void showAddDialog() {
     String addCommoditiesSearchText = ""; // Local search text for this dialog
     List<String> tempSelectedItems = List.from(displayedCommoditiesIds); // Temporary list to track changes
 
@@ -589,13 +574,9 @@ class _HomePageState extends State<HomePage> {
                 (itemId, isChecked) {
                   setState(() {
                     if (isChecked) {
-                      if (!tempSelectedItems.contains(itemId)) {
-                        tempSelectedItems.add(itemId);
-                        print("➕ Added commodity $itemId to temp selection");
-                      }
+                      tempSelectedItems.add(itemId);
                     } else {
                       tempSelectedItems.remove(itemId);
-                      print("➖ Removed commodity $itemId from temp selection");
                     }
                   });
                 },
@@ -608,35 +589,14 @@ class _HomePageState extends State<HomePage> {
               actions: [
                 TextButton(
                   onPressed: () async {
-                    try {
-                      // Save changes to the main list and persist them
-                      this.setState(() {
-                        displayedCommoditiesIds = List.from(tempSelectedItems);
-                      });
-                      
-                      print("✅ Saved ${displayedCommoditiesIds.length} commodity IDs from dialog");
-                      
-                      // If no commodities are selected, initialize with all
-                      if (displayedCommoditiesIds.isEmpty) {
-                        print("⚠️ No commodities selected, initializing with all");
-                        await _initializeWithAllCommodities();
-                      } else {
-                        await saveDisplayedCommodities(); // Persist changes
-                      }
-                      
-                      await fetchCommodities(); // Reload the main list
-                      Navigator.pop(context); // Close the dialog
-                    } catch (e) {
-                      print("❌ Error saving commodities from dialog: $e");
-                    }
+                    setState(() {
+                      displayedCommoditiesIds = List.from(tempSelectedItems); // Save changes to the main list
+                    });
+                    await saveDisplayedCommodities(); // Persist changes
+                    await fetchCommodities(); // Reload the main list
+                    Navigator.pop(context); // Close the dialog
                   },
-                  child: Text("Save"),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(context); // Close without saving
-                  },
-                  child: Text("Cancel"),
+                  child: Text("Done"),
                 ),
               ],
             );
@@ -740,21 +700,48 @@ class _HomePageState extends State<HomePage> {
                 ),
               )
             else
-              IconButton(
-                icon: Icon(Icons.search, color: kBlue),
-                onPressed: () {
-                  setState(() {
-                    isSearching = true; // Activate the search bar
-                  });
-                  _searchFocusNode.requestFocus(); // Automatically focus the search bar
-                },
+              Row(
+                children: [
+                  // Refresh button
+                  IconButton(
+                    icon: Icon(Icons.refresh, color: kBlue),
+                    onPressed: refreshDataFromFirestore,
+                    tooltip: 'Refresh data',
+                  ),
+                  // Search button
+                  IconButton(
+                    icon: Icon(Icons.search, color: kBlue),
+                    onPressed: () {
+                      setState(() {
+                        isSearching = true; // Activate the search bar
+                      });
+                      _searchFocusNode.requestFocus(); // Automatically focus the search bar
+                    },
+                  ),
+                ],
               ),
-          ],
-        ),
+          ],        ),
         body: Stack(
           children: [
             Column(
               children: [
+              // Global date display
+                Container(
+                  width: double.infinity,
+                  color: Colors.white,
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  alignment: Alignment.center,
+                  child: Text(
+                    globalPriceDate.isEmpty 
+                        ? "Updating price data..." 
+                        : "As of: $globalPriceDate",
+                    style: TextStyle(
+                      color: kBlue,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ),
                 Container(
                   width: double.infinity,
                   padding: EdgeInsets.symmetric(horizontal: 16, vertical: 20),
@@ -767,45 +754,10 @@ class _HomePageState extends State<HomePage> {
                         offset: Offset(0, 12),
                       )
                     ],
-                  ),                  child: Column(
+                  ),
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      if (selectedCommodityId != null) ...[
-                        FutureBuilder<List<Map<String, dynamic>>>(
-                          future: firestoreService.fetchWeeklyPrices(selectedCommodityId!),
-                          builder: (context, snapshot) {
-                            String formattedDate = "Loading date...";
-                            
-                            if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-                              // Find actual prices (not forecasts)
-                              final actualPrices = snapshot.data!
-                                  .where((price) => price['is_forecast'] != true)
-                                  .toList();
-                                  
-                              if (actualPrices.isNotEmpty) {
-                                // Sort by end_date to find the most recent price
-                                actualPrices.sort((a, b) {
-                                  final aDate = a['end_date'] as Timestamp;
-                                  final bDate = b['end_date'] as Timestamp;
-                                  return bDate.compareTo(aDate); // Sort descending
-                                });
-                                
-                                formattedDate = actualPrices.first['formatted_end_date'] ?? "-";
-                              }
-                            }
-                            
-                            return Text(
-                              "As of: $formattedDate",
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: kBlue,
-                                fontWeight: FontWeight.w400,
-                              ),
-                            );
-                          },
-                        ),
-                        SizedBox(height: 12),
-                      ],
                       Container(
                         height: 200,
                         width: MediaQuery.of(context).size.width * 0.85,
@@ -828,34 +780,6 @@ class _HomePageState extends State<HomePage> {
                                     return Center(child: CircularProgressIndicator());
                                   }
                                   
-                                  if (snapshot.hasError) {
-                                    print("❌ Error: ${snapshot.error}");
-                                    return Center(
-                                      child: Padding(
-                                        padding: const EdgeInsets.all(16.0),
-                                        child: Column(
-                                          mainAxisAlignment: MainAxisAlignment.center,
-                                          children: [
-                                            Icon(Icons.error_outline, color: Colors.red, size: 48),
-                                            SizedBox(height: 16),
-                                            Text(
-                                              "Error loading price data",
-                                              textAlign: TextAlign.center,
-                                              style: TextStyle(fontSize: 14, color: Colors.grey[700]),
-                                            ),
-                                            SizedBox(height: 8),
-                                            if (snapshot.error.toString().contains("index")) 
-                                              Text(
-                                                "This may be due to a missing Firestore index. Please check the console for more information.",
-                                                textAlign: TextAlign.center,
-                                                style: TextStyle(fontSize: 12, color: Colors.grey),
-                                              )
-                                          ],
-                                        ),
-                                      )
-                                    );
-                                  }
-                                  
                                   if (!snapshot.hasData || snapshot.data!.isEmpty) {
                                     return Center(
                                       child: Text(
@@ -863,82 +787,14 @@ class _HomePageState extends State<HomePage> {
                                         style: TextStyle(fontSize: 14, color: Colors.grey),
                                       )
                                     );
-                                  }                                  // Filter for actual prices (is_forecast = false)
+                                  }
+
+                                  // Filter for actual prices (is_forecast = false)
                                   final actualPrices = snapshot.data!
                                       .where((p) => p['is_forecast'] == false)
                                       .toList();
                                   
-                                  print("📊 Found ${actualPrices.length} actual prices out of ${snapshot.data!.length} total");
-                                  
-                                  // Debug each price entry to check values
-                                  if (actualPrices.isNotEmpty) {
-                                    print("🔍 First few actual prices:");
-                                    final samplesToShow = actualPrices.length > 3 ? 3 : actualPrices.length;
-                                    for (int i = 0; i < samplesToShow; i++) {
-                                      final entry = actualPrices[i];
-                                      print("  [$i] Price: ${entry['price']}, Date: ${entry['formatted_end_date']}, Forecast: ${entry['is_forecast']}");
-                                    }
-                                  }
-                                  
                                   if (actualPrices.isEmpty) {
-                                    // Check if we have any data at all
-                                    final anyData = snapshot.data!.isNotEmpty;
-                                    
-                                    if (anyData) {
-                                      print("⚠️ Only forecast data available (${snapshot.data!.length} entries)");
-                                      
-                                      // Use the forecast data as fallback
-                                      final forecastPrices = snapshot.data!
-                                          .where((p) => p['is_forecast'] == true)
-                                          .toList();
-                                          
-                                      if (forecastPrices.isNotEmpty) {
-                                        // Sort forecast prices
-                                        forecastPrices.sort((a, b) {
-                                          final aDate = a['end_date'] as Timestamp;
-                                          final bDate = b['end_date'] as Timestamp;
-                                          return bDate.compareTo(aDate); // Most recent first
-                                        });
-                                        
-                                        final latestForecast = forecastPrices.first;
-                                        final forecastPrice = latestForecast['price'] ?? 0.0;
-                                        final forecastDate = latestForecast['formatted_end_date'] ?? "-";
-                                        
-                                        return Column(
-                                          mainAxisAlignment: MainAxisAlignment.center,
-                                          children: [
-                                            Text(
-                                              "No actual price data available, showing forecast",
-                                              style: TextStyle(fontSize: 14, color: Colors.grey),
-                                            ),
-                                            Padding(
-                                              padding: const EdgeInsets.only(top: 8.0),
-                                              child: Column(
-                                                children: [
-                                                  Text(
-                                                    "Forecast price: ₱${_formatPrice(forecastPrice)}",
-                                                    style: TextStyle(
-                                                      fontSize: 16,
-                                                      color: kPink,
-                                                      fontWeight: FontWeight.bold,
-                                                    ),
-                                                  ),
-                                                  SizedBox(height: 4),
-                                                  Text(
-                                                    "Forecast date: $forecastDate",
-                                                    style: TextStyle(
-                                                      fontSize: 12,
-                                                      color: kPink,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        );
-                                      }
-                                    }
-                                    
                                     return Column(
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
@@ -971,7 +827,9 @@ class _HomePageState extends State<HomePage> {
                                         ),
                                       ],
                                     );
-                                  }                                  // Sort by end_date to find the most recent price
+                                  }
+
+                                  // Sort by end_date to find the most recent price
                                   actualPrices.sort((a, b) {
                                     final aDate = a['end_date'] as Timestamp;
                                     final bDate = b['end_date'] as Timestamp;
@@ -983,15 +841,11 @@ class _HomePageState extends State<HomePage> {
                                   final price = latestPrice['price'] ?? 0.0;
                                   final formattedDate = latestPrice['formatted_end_date'] ?? "-";
                                   
-                                  // Print debug info
-                                  print("📊 Latest price data for ${selectedCommodityId}: ₱$price ($formattedDate)");
-                                  
                                   // Prepare the display prices based on selected forecast view
                                   List<Map<String, dynamic>> displayPrices = [];
-                                    if (selectedForecast == "Now") {
-                                    // For "Now" option, make sure we're using the most recent actual price
-                                    print("🔍 'Now' option selected, using most recent actual price");
-                                    print("📅 Date: ${latestPrice['formatted_end_date']}, Price: ${latestPrice['price']}");
+                                  
+                                  if (selectedForecast == "Now") {
+                                    // Only show the most recent price
                                     displayPrices = [latestPrice];
                                   } else if (selectedForecast == "Next Week") {
                                     // Show all available actual prices plus 1-week forecasts
@@ -1120,7 +974,8 @@ class _HomePageState extends State<HomePage> {
                                             ),
                                           ),
                                         ),
-                                      ),                                      Container(
+                                      ),
+                                      Container(
                                         padding: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
                                         decoration: BoxDecoration(
                                           color: Colors.white,
@@ -1135,12 +990,21 @@ class _HomePageState extends State<HomePage> {
                                         ),
                                         margin: const EdgeInsets.only(top: 8.0),
                                         child: Column(
-                                          children: [                                            Text(
-                                              "Latest price: ₱${_formatPrice(price)}",
+                                          children: [
+                                            Text(
+                                              "Latest price: ₱${price is double ? price.toStringAsFixed(2) : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2)}",
                                               style: TextStyle(
                                                 fontSize: 16,
                                                 color: kBlue,
                                                 fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            SizedBox(height: 4),
+                                            Text(
+                                              "As of: $formattedDate",
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: kBlue,
                                               ),
                                             ),
                                           ],
@@ -1233,10 +1097,13 @@ class _HomePageState extends State<HomePage> {
                                       double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
                                       return priceB.compareTo(priceA);
                                     });
-                                  } else {
-                                    filteredCommodities = List.from(commodities);
+                                  } else {                                    filteredCommodities = List.from(commodities);
                                     selectedSort = null;
                                   }
+                                  
+                                  // Cache the sorted filtered commodities
+                                  DataCache.saveFilteredCommodities(filteredCommodities);
+                                  saveState(); // Save sort preference
                                 });
                               },
                               dropdownColor: Colors.white, // Match the dropdown background color
@@ -1284,8 +1151,7 @@ class _HomePageState extends State<HomePage> {
                                     ),
                                   ),
                                 );
-                              }).toList(),
-                              onChanged: (String? newValue) {
+                              }).toList(),                              onChanged: (String? newValue) {
                                 setState(() {
                                   if (newValue == "None") {
                                     selectedFilter = null; // Reset to default
@@ -1306,6 +1172,9 @@ class _HomePageState extends State<HomePage> {
                                       return category == newValue?.toLowerCase();
                                     }).toList();
                                   }
+                                  
+                                  // Cache filtered commodities after applying the filter
+                                  DataCache.saveFilteredCommodities(filteredCommodities);
                                   saveState(); // Save the updated state
                                   print("Filtered Commodities after filter change: ${filteredCommodities.length}");
                                 });
@@ -1328,99 +1197,72 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ],
                   ),
-                ),                Expanded(
+                ),
+                Expanded(
                   child: displayedCommodities.isEmpty
                       ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                "No commodities found",
-                                style: TextStyle(fontSize: 18, color: Colors.grey),
-                              ),
-                              SizedBox(height: 16),
-                              ElevatedButton(
-                                onPressed: () async {
-                                  await _initializeWithAllCommodities();
-                                  await fetchCommodities();
-                                },
-                                child: Text("Reset Commodity List"),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: kPink,
-                                  foregroundColor: Colors.white,
-                                ),
-                              )
-                            ],
+                          child: Text(
+                            "No commodities found.",
+                            style: TextStyle(fontSize: 16, color: Colors.grey),
                           ),
                         )
-                      : Column(
-                          children: [
-                            // Debug info bar
-                            Container(
-                              padding: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                              color: Colors.amber.withOpacity(0.2),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text("Total: ${displayedCommodities.length}", 
-                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                  Text("IDs: ${displayedCommoditiesIds.length}",
-                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                  Text("All: ${commodities.length}",
-                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                ],
-                              ),
-                            ),
-                            // Actual commodity list
-                            Expanded(
-                              child: ListView.builder(
-                                padding: EdgeInsets.only(bottom: 70),
-                                itemCount: displayedCommodities.length,
-                                itemBuilder: (context, index) {
-                                  final commodity = displayedCommodities[index];
-                                  final commodityId = commodity['id'].toString();
+                      : ListView.builder(
+                          padding: EdgeInsets.only(bottom: 70),
+                          itemCount: displayedCommodities.length,
+                          itemBuilder: (context, index) {
+                            final commodity = displayedCommodities[index];
+                            final commodityId = commodity['id'].toString();
 
-                                  return GestureDetector(
-                                    onLongPress: () {
-                                      setState(() {
-                                        isHoldMode = true;
-                                        heldCommodities.add(commodityId); // Use ID
-                                        selectedCommodityId = null;
-                                      });
-                                    },
-                                    onTap: () {
-                                      if (isHoldMode) {
-                                        setState(() {
-                                          if (heldCommodities.contains(commodityId)) {
-                                            heldCommodities.remove(commodityId);
-                                            if (heldCommodities.isEmpty) {
-                                              isHoldMode = false;
-                                            }
-                                          } else {
-                                            heldCommodities.add(commodityId);
-                                          }
-                                        });
-                                      } else {
-                                        setState(() {
-                                          if (selectedCommodityId == commodityId) {
-                                            selectedCommodityId = null;
-                                          } else {
-                                            selectedCommodityId = commodityId;
-                                          }
-                                        });
+                            return GestureDetector(
+                              onLongPress: () {
+                                setState(() {
+                                  isHoldMode = true;
+                                  heldCommodities.add(commodityId); // Use ID
+                                  selectedCommodityId = null;
+                                });
+                              },
+                              onTap: () {
+                                if (isHoldMode) {
+                                  setState(() {
+                                    if (heldCommodities.contains(commodityId)) {
+                                      heldCommodities.remove(commodityId);
+                                      if (heldCommodities.isEmpty) {
+                                        isHoldMode = false;
                                       }
-                                    },
-                                    child: _buildCommodityItem(
-                                      commodity,
-                                      isSelected: selectedCommodityId == commodityId,
-                                      isHeld: heldCommodities.contains(commodityId),
-                                      index: index,
-                                    ),
-                                  );
-                                },
+                                    } else {
+                                      heldCommodities.add(commodityId);
+                                    }
+                                  });
+                                } else {                                  setState(() {
+                                    if (selectedCommodityId == commodityId) {
+                                      selectedCommodityId = null;
+                                    } else {
+                                      selectedCommodityId = commodityId;
+                                      
+                                      // Cache the selected commodity details to prevent price reset
+                                      final selectedCommodity = filteredCommodities.firstWhere(
+                                        (c) => c['id'].toString() == commodityId,
+                                        orElse: () => commodities.firstWhere(
+                                          (c) => c['id'].toString() == commodityId,
+                                          orElse: () => {},
+                                        ),
+                                      );
+                                      
+                                      if (selectedCommodity.isNotEmpty) {
+                                        DataCache.saveSelectedCommodityDetails(selectedCommodity);
+                                      }
+                                    }
+                                  });
+                                }
+                              },
+                              child: _buildCommodityItem(
+                                commodity,
+                                isSelected: selectedCommodityId == commodityId,
+                                isHeld: heldCommodities.contains(commodityId),
+                                index: index,
                               ),
-                            ),
-                          ],
+                            );
+                          },
                         ),
                 ),
               ],
@@ -1465,7 +1307,6 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
-
   Widget _forecastButton(String text, {double height = 25}) {
     return ConstrainedBox(
       constraints: BoxConstraints(minWidth: 100, maxWidth: 130), // Increased min and max width
@@ -1479,11 +1320,38 @@ class _HomePageState extends State<HomePage> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
-          ),
-          onPressed: () {
-            setState(() {
-              selectedForecast = text;
-            });
+          ),          onPressed: () async {
+            if (selectedForecast != text) {
+              setState(() {
+                selectedForecast = text;
+                // Clear selected commodity when forecast changes
+                selectedCommodityId = null;
+              });
+              
+              // Save selected forecast to cache immediately
+              await DataCache.saveSelectedForecast(text);
+              
+              // Show loading indicator
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (BuildContext context) {
+                  return Center(
+                    child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(kPink),
+                    ),
+                  );
+                }
+              );
+              
+              try {
+                // Refresh all commodity prices with the new forecast setting
+                await fetchCommodities();
+              } finally {
+                // Hide loading indicator
+                Navigator.of(context).pop();
+              }
+            }
           },
           child: FittedBox(
             fit: BoxFit.scaleDown,
@@ -1500,7 +1368,6 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
-
   Widget _buildCommodityItem(Map<String, dynamic> commodity, {required bool isSelected, required bool isHeld, required int index}) {
     final String commodityId = commodity['id'].toString();
     
@@ -1553,18 +1420,13 @@ class _HomePageState extends State<HomePage> {
         padding: const EdgeInsets.symmetric(horizontal: 16.0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
-          children: [            // Display the commodity image
+          children: [
+            // Display the commodity image
             CircleAvatar(
               radius: 24,
-              backgroundColor: Colors.grey[200],
               backgroundImage: AssetImage(
                 'assets/commodity_images/${getCommodityImage(commodityId)}',
               ),
-              onBackgroundImageError: (e, stackTrace) {
-                print("⚠️ Error loading image for commodity $commodityId: $e");
-              },
-              child: getCommodityImage(commodityId) == "default.jpg" ? 
-                Text(displayName.substring(0, 1).toUpperCase()) : null,
             ),
             SizedBox(width: 16),
             Expanded(
@@ -1607,7 +1469,8 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
             ),
-            SizedBox(width: 5),            // Price and date
+            SizedBox(width: 5),
+            // Price and date
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisAlignment: MainAxisAlignment.center,
@@ -1616,15 +1479,28 @@ class _HomePageState extends State<HomePage> {
                   "₱$formattedPrice",
                   style: TextStyle(fontWeight: FontWeight.w500, fontSize: 20),
                 ),
-                // Add price date
-                Text(
-                  commodity['price_date'] != null ? "as of ${commodity['price_date']}" : "",
-                  style: TextStyle(
-                    fontWeight: FontWeight.w300, 
-                    fontSize: 11,
-                    color: Colors.grey[600],
+                // Display "as of: date" if it's not from the global date
+                if (commodity['is_global_date'] == false && 
+                    commodity['price_date'] != null && 
+                    commodity['price_date'].toString().isNotEmpty)
+                  Text(
+                    "as of: ${commodity['price_date']}",
+                    style: TextStyle(
+                      fontWeight: FontWeight.w300,
+                      fontSize: 12,
+                      color: kBlue,
+                    ),
                   ),
-                ),
+                // Show forecast indicator
+                if (commodity['is_forecast'] == true)
+                  Text(
+                    "(Forecast)",
+                    style: TextStyle(
+                      fontWeight: FontWeight.w300,
+                      fontSize: 12,
+                      color: Colors.orange,
+                    ),
+                  ),
               ],
             ),
           ],
@@ -1632,6 +1508,7 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+
   List<String> getAllCommodities() {
     List<String> allCommodities = [];
     COMMODITY_TYPES.forEach((key, commodities) {
@@ -1642,75 +1519,37 @@ class _HomePageState extends State<HomePage> {
           allCommodities.add(commodity);
         }
       }
-    });
-    return allCommodities;
-  }
-  // Helper to apply filters
+    });    return allCommodities;
+  }  // Helper to apply filters
   List<Map<String, dynamic>> _applyFilter(
       List<Map<String, dynamic>> displayedCommodities,
       List<Map<String, dynamic>> allCommodities) {
-    
-    print("🔍 Applying filter: $selectedFilter");
+    List<Map<String, dynamic>> result;
     
     if (selectedFilter == null || selectedFilter == "None") {
-      print("🔍 No filter selected, showing all ${displayedCommodities.length} commodities");
-      return List.from(displayedCommodities);
+      result = List.from(displayedCommodities);
     } else if (selectedFilter == "Favorites") {
-      final filtered = allCommodities.where((commodity) {
+      result = allCommodities.where((commodity) {
         final commodityId = commodity['id'].toString();
         return favoriteCommodities.contains(commodityId);
       }).toList();
-      
-      print("⭐ Showing ${filtered.length} favorites");
-      return filtered;
     } else {
-      // Filter by category
-      final filtered = displayedCommodities.where((commodity) {
+      result = displayedCommodities.where((commodity) {
         final commodityId = commodity['id'].toString();
         final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
-        if (typeInfo == null) {
-          print("⚠️ No type info for commodity $commodityId");
-          return false;
-        }
+        if (typeInfo == null) return false;
         
         final category = typeInfo['category'] ?? "";
-        final match = category.toLowerCase() == selectedFilter?.toLowerCase();
-        
-        // Debug mismatches
-        if (!match && selectedFilter != null) {
-          print("🔍 Category mismatch for ${typeInfo['display_name']}: '$category' vs filter: '$selectedFilter'");
-        }
-        
-        return match;
+        return category.toLowerCase() == selectedFilter?.toLowerCase();
       }).toList();
-      
-      print("🔍 Filter by category '$selectedFilter' resulted in ${filtered.length} commodities");
-      
-      if (filtered.isEmpty && displayedCommodities.isNotEmpty) {
-        print("⚠️ WARNING: Filter resulted in empty list, checking case sensitivity...");
-        
-        // Try case-insensitive matching
-        final caseInsensitiveFiltered = displayedCommodities.where((commodity) {
-          final commodityId = commodity['id'].toString();
-          final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
-          if (typeInfo == null) return false;
-          
-          final category = typeInfo['category'] ?? "";
-          return category.toLowerCase() == selectedFilter?.toLowerCase();
-        }).toList();
-        
-        if (caseInsensitiveFiltered.isNotEmpty) {
-          print("✅ Found ${caseInsensitiveFiltered.length} commodities with case-insensitive matching");
-          return caseInsensitiveFiltered;
-        }
-        
-        print("⚠️ Returning all commodities as fallback");
-        return List.from(displayedCommodities); // Fallback to all 
-      }
-      
-      return filtered;
     }
+    
+    // Cache the filtered result after applying filter
+    Future.microtask(() => DataCache.saveFilteredCommodities(result));
+    
+    return result;
   }
+
   // Fix the FutureBuilder closing in _buildDialogContent
   Widget _buildDialogContent(
       String searchText,
@@ -1747,37 +1586,27 @@ class _HomePageState extends State<HomePage> {
             children: [
               TextButton(
                 onPressed: () async {
-                  try {
-                    final querySnapshot = await _firestore.collection('commodities').get();
-                    final allCommodities = querySnapshot.docs
-                      .map((doc) => doc.id)
-                      .toList();
-                      
-                    print("✅ Checking all ${allCommodities.length} commodities");
-                    for (String commodityId in allCommodities) {
-                      if (!selectedItems.contains(commodityId)) {
-                        onItemChanged(commodityId, true);
-                      }
+                  final querySnapshot = await _firestore.collection('commodities').get();
+                  final allCommodities = querySnapshot.docs
+                    .map((doc) => doc.id)
+                    .toList();
+                    
+                  for (String commodityId in allCommodities) {
+                    if (!selectedItems.contains(commodityId)) {
+                      onItemChanged(commodityId, true);
                     }
-                  } catch (e) {
-                    print("❌ Error checking all commodities: $e");
                   }
                 },
-                child: Text("Check All", style: TextStyle(color: kBlue)),
+                child: Text("Check All"),
               ),
               TextButton(
                 onPressed: () {
-                  try {
-                    List<String> itemsToRemove = List.from(selectedItems);
-                    print("✅ Removing all ${itemsToRemove.length} selected commodities");
-                    for (String item in itemsToRemove) {
-                      onItemChanged(item, false);
-                    }
-                  } catch (e) {
-                    print("❌ Error unchecking all commodities: $e");
+                  List<String> itemsToRemove = List.from(selectedItems);
+                  for (String item in itemsToRemove) {
+                    onItemChanged(item, false);
                   }
                 },
-                child: Text("Uncheck All", style: TextStyle(color: kBlue)),
+                child: Text("Uncheck All"),
               ),
             ],
           ),
@@ -1790,16 +1619,7 @@ class _HomePageState extends State<HomePage> {
                 }
                 
                 if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.warning, color: Colors.orange, size: 48),
-                        SizedBox(height: 16),
-                        Text("No commodities found", style: TextStyle(fontSize: 16)),
-                      ],
-                    ),
-                  );
+                  return Center(child: Text("No commodities found"));
                 }
                 
                 // Group commodities by category
@@ -1815,10 +1635,7 @@ class _HomePageState extends State<HomePage> {
                   final commodityId = doc.id;
                   final displayData = COMMODITY_ID_TO_DISPLAY[commodityId];
                   
-                  if (displayData == null) {
-                    print("⚠️ No display data for commodity: $commodityId");
-                    continue;
-                  }
+                  if (displayData == null) continue;
                   
                   final category = displayData['category'] ?? "Other";
                   
@@ -1886,18 +1703,57 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
-  // Helper method to format price as a string with 2 decimal places
-  String _formatPrice(dynamic price) {
-    print("💲 Formatting price: $price (type: ${price.runtimeType})");
+
+  // Method to manually refresh data from Firestore
+  Future<void> refreshDataFromFirestore() async {
+    print("🔄 Manual refresh requested");
+    setState(() {
+      _dataInitialized = false; // Force a full refresh
+    });
     
-    if (price is double) {
-      return price.toStringAsFixed(2);
-    } else if (price is num) {
-      return price.toDouble().toStringAsFixed(2);
-    } else {
-      final formattedValue = (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2);
-      print("💲 Converted price to: $formattedValue");
-      return formattedValue;
+    // Show a loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(kPink),
+          ),
+        );
+      }
+    );
+    
+    try {
+      // Force cache invalidation
+      await DataCache.invalidateCache();
+      
+      // Fetch fresh data
+      await fetchCommodities();
+      
+      // Close loading dialog
+      Navigator.of(context, rootNavigator: true).pop();
+      
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Data refreshed successfully'),
+          backgroundColor: kGreen,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      // Close loading dialog
+      Navigator.of(context, rootNavigator: true).pop();
+      
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to refresh data: $e'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 3),
+        ),
+      );
     }
   }
 }

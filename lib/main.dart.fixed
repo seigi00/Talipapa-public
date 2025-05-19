@@ -1,0 +1,1122 @@
+// filepath: c:\Users\Justine\coolapp\lib\main.dart
+import 'package:Talipapa/tutorial_overlay.dart';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+// Firestore
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+// Local imports
+import 'constants.dart'; // Make sure this contains COMMODITY_ID_TO_DISPLAY
+import 'image_mapping.dart';
+import 'services/firestore_service.dart';
+import 'utils/dialog_helpers.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Talipapa',
+      theme: ThemeData(
+        primaryColor: kGreen,
+        scaffoldBackgroundColor: kLightGray,
+        iconTheme: const IconThemeData(color: kBlue),
+        textTheme: const TextTheme(
+          bodyLarge: TextStyle(color: kBlue),
+          bodyMedium: TextStyle(color: kBlue),
+        ),
+        fontFamily: 'Roboto',
+      ),
+      home: HomePage(),
+    );
+  }
+}
+
+class HomePage extends StatefulWidget {
+  @override
+  _HomePageState createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  String selectedForecast = "Now";
+  String searchText = "";
+  bool isSearching = false;
+  static bool _hasShownTutorial = false;
+  bool showTutorial = false;
+  int? selectedIndex;
+  String? selectedSort;
+  String? selectedFilter;
+  String? selectedCommodityId; // <-- Use ID instead of name
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final firestoreService = FirestoreService();
+
+  List<Map<String, dynamic>> commodities = [];
+  List<Map<String, dynamic>> filteredCommodities = [];
+  List<String> favoriteCommodities = [];
+  List<String> displayedCommoditiesIds = []; // <-- Use IDs  
+  bool isHoldMode = false;
+  Set<String> heldCommodities = {};
+  String? deviceUUID;
+  String globalPriceDate = ""; // Store the latest global price date
+
+  // Add isLoading state variable to track loading status
+  bool isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchFocusNode.addListener(() {
+      if (!_searchFocusNode.hasFocus && isSearching) {
+        setState(() {
+          isSearching = false;
+        });
+      }
+    });
+    _initializeUUID();
+    _checkFirstLaunch();
+    fetchCommodities();
+    loadDisplayedCommodities();
+    loadFavorites();
+    loadState();
+  }
+
+  Future<void> _initializeUUID() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? storedUUID = prefs.getString('deviceUUID');
+
+    if (storedUUID == null) {
+      // Generate a new UUID
+      final uuid = Uuid();
+      storedUUID = uuid.v4();
+
+      // Save the UUID to SharedPreferences
+      await prefs.setString('deviceUUID', storedUUID);
+    }
+
+    setState(() {
+      deviceUUID = storedUUID;
+    });
+
+    print("Device UUID: $deviceUUID");
+  }
+
+  Future<void> _checkFirstLaunch() async {
+    if (_hasShownTutorial) return; // Prevent showing multiple times in one session
+
+    final prefs = await SharedPreferences.getInstance();
+    bool skipTutorial = prefs.getBool('skipLaunchTutorial') ?? false;
+
+    if (!skipTutorial) {
+      setState(() {
+        showTutorial = true;
+        _hasShownTutorial = true; // Mark as shown for this session
+      });
+    }
+  }
+  
+  void _closeTutorial() {
+    setState(() {
+      showTutorial = false;
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    // Fetch commodities and repopulate filteredCommodities
+    fetchCommodities();
+
+    // Repopulate filteredCommodities based on the current filter
+    setState(() {
+      if (selectedFilter == "None" || selectedFilter == null) {
+        filteredCommodities = List.from(commodities);
+      } else if (selectedFilter == "Favorites") {
+        // Update the filter logic for "Favorites"
+        filteredCommodities = commodities.where((commodity) {
+          final commodityId = commodity['id'].toString();
+          return favoriteCommodities.contains(commodityId);
+        }).toList();
+      } else {
+        // Update filter logic for commodity types - now using category
+        filteredCommodities = commodities.where((commodity) {
+          final commodityId = commodity['id'].toString();
+          final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
+          if (typeInfo == null) return false;
+          
+          final category = typeInfo['category'] ?? "";
+          return category.toLowerCase() == selectedFilter?.toLowerCase();
+        }).toList();
+      }
+    });
+  }
+  
+  // Fetch commodities from Firestore  
+  Future<void> fetchCommodities() async {
+    setState(() {
+      isLoading = true;
+    });
+    
+    try {
+      // Get the global latest price date first
+      try {
+        final latestPriceQuery = await _firestore
+            .collection('price_entries')
+            .where('is_forecast', isEqualTo: false)
+            .orderBy('end_date', descending: true)
+            .limit(1)
+            .get();
+            
+        if (latestPriceQuery.docs.isNotEmpty) {
+          final latestPriceDoc = latestPriceQuery.docs.first;
+          final endDate = latestPriceDoc['end_date'] as Timestamp?;
+          
+          if (endDate != null) {
+            final date = endDate.toDate();
+            globalPriceDate = "${date.month}/${date.day}/${date.year}";
+            print("📅 Latest global price date: $globalPriceDate");
+          }
+        }
+      } catch (e) {
+        print("⚠️ Error finding latest global date: $e");
+      }
+      
+      final querySnapshot = await _firestore.collection('commodities').get();
+      final List<Map<String, dynamic>> allCommodities = [];
+      
+      // Process each commodity document
+      for (var doc in querySnapshot.docs) {
+        final commodityId = doc.id; // This is the UUID
+        // Get the most recent price for this commodity
+        try {
+          final pricesSnapshot = await _firestore
+              .collection('price_entries')
+              .where('commodity_id', isEqualTo: commodityId)
+              .where('is_forecast', isEqualTo: false)
+              .orderBy('end_date', descending: true)
+              .limit(1)
+              .get();
+          
+          if (pricesSnapshot.docs.isNotEmpty) {
+            final priceData = pricesSnapshot.docs.first.data();
+            final price = priceData['price'] ?? 0.0;
+            
+            // Format date for display
+            final endDate = priceData['end_date'] as Timestamp?;
+            final formattedDate = endDate != null ? 
+                "${endDate.toDate().month}/${endDate.toDate().day}/${endDate.toDate().year}" : 
+                "No date";
+            
+            // Create the commodity entry with price and date info
+            final commodityEntry = {
+              'id': commodityId,
+              'weekly_average_price': price,
+              'price_date': formattedDate,
+              'is_forecast': false, // Mark as non-forecast
+            };
+            
+            allCommodities.add(commodityEntry);
+          } else {
+            // If no price data, still include the commodity with default values
+            allCommodities.add({
+              'id': commodityId,
+              'weekly_average_price': 0.0,
+              'price_date': 'No data',
+              'is_forecast': false,
+            });
+          }
+        } catch (error) {
+          print("❌ Error fetching price data for $commodityId: $error");
+          // Add commodity with default values on error
+          allCommodities.add({
+            'id': commodityId,
+            'weekly_average_price': 0.0,
+            'price_date': 'Error loading data',
+            'is_forecast': false,
+          });
+        }
+      }
+
+      setState(() {
+        commodities = allCommodities.where((commodity) {
+          final itemId = commodity['id'].toString();
+          return displayedCommoditiesIds.contains(itemId);
+        }).toList();
+
+        for (String favorite in favoriteCommodities) {
+          if (!displayedCommoditiesIds.contains(favorite)) {
+            displayedCommoditiesIds.add(favorite);
+          }
+        }
+
+        filteredCommodities = _applyFilter(commodities, allCommodities);
+        isLoading = false; // Set loading to false after updating state
+      });
+    } catch (e) {
+      print("❌ Error fetching commodities: $e");
+      setState(() {
+        isLoading = false; // Also set loading to false on error
+      });
+    }
+  }
+
+  // Load displayed commodities from SharedPreferences
+  Future<void> loadDisplayedCommodities() async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedCommodities = prefs.getStringList('displayedCommodities');
+    setState(() {
+      if (storedCommodities != null) {
+        displayedCommoditiesIds = storedCommodities;
+        filteredCommodities = commodities
+            .where((commodity) => displayedCommoditiesIds.contains(commodity['id'].toString()))
+            .toList();
+      }
+    });
+  }
+
+  // Save displayed commodities to SharedPreferences
+  Future<void> saveDisplayedCommodities() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('displayedCommodities', displayedCommoditiesIds);
+  }
+
+  Future<void> saveFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('favoriteCommodities', favoriteCommodities);
+    print("Favorites saved: $favoriteCommodities");
+  }
+
+  Future<void> loadFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedFavorites = prefs.getStringList('favoriteCommodities');
+    setState(() {
+      if (storedFavorites != null) {
+        favoriteCommodities = storedFavorites;
+        for (String favorite in favoriteCommodities) {
+          if (!displayedCommoditiesIds.contains(favorite)) {
+            displayedCommoditiesIds.add(favorite);
+          }
+        }
+      }
+    });
+    print("Favorites loaded: $favoriteCommodities");
+  }
+
+  Future<void> saveState() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('selectedFilter', selectedFilter ?? "None");
+    await prefs.setString('selectedSort', selectedSort ?? "None");
+    print("State saved: Filter = $selectedFilter, Sort = $selectedSort");
+  }
+
+  Future<void> loadState() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      selectedFilter = prefs.getString('selectedFilter') == "None" ? null : prefs.getString('selectedFilter');
+      selectedSort = prefs.getString('selectedSort') == "None" ? null : prefs.getString('selectedSort');
+    });
+
+    // Apply the loaded filter and sort
+    if (selectedFilter == null) {
+      filteredCommodities = List.from(commodities);
+    } else if (selectedFilter == "Favorites") {
+      // Update the filter logic for "Favorites"
+      filteredCommodities = commodities.where((commodity) {
+        final commodityId = commodity['id'].toString();
+        return favoriteCommodities.contains(commodityId);
+      }).toList();
+    } else {
+      // Update filter logic for commodity types - now using category
+      filteredCommodities = commodities.where((commodity) {
+        final commodityId = commodity['id'].toString();
+        final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
+        if (typeInfo == null) return false;
+        
+        final category = typeInfo['category'] ?? "";
+        return category.toLowerCase() == selectedFilter?.toLowerCase();
+      }).toList();
+    }
+
+    if (selectedSort == "Name") {
+      filteredCommodities.sort((a, b) {
+        final nameA = COMMODITY_ID_TO_DISPLAY[a['id'].toString()]?['display_name'] ?? "";
+        final nameB = COMMODITY_ID_TO_DISPLAY[b['id'].toString()]?['display_name'] ?? "";
+        return nameA.compareTo(nameB);
+      });
+    } else if (selectedSort == "Price (Low to High)") {
+      filteredCommodities.sort((a, b) {
+        double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
+        double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
+        return priceA.compareTo(priceB);
+      });
+    } else if (selectedSort == "Price (High to Low)") {
+      filteredCommodities.sort((a, b) {
+        double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
+        double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
+        return priceB.compareTo(priceA);
+      });
+    }
+
+    print("State loaded: Filter = $selectedFilter, Sort = $selectedSort");
+  }
+  
+  void showFavoritesDialog() {
+    String favoritesSearchText = ""; // Local search text for this dialog
+    List<Map<String, dynamic>> allCommodities = [];
+    
+    // Get all commodities from Firestore
+    _firestore.collection('commodities').get().then((querySnapshot) {
+      allCommodities = querySnapshot.docs.map((doc) {
+        return {'id': doc.id};
+      }).toList();
+    });
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text("Select Favorites"),
+              content: buildDialogContent(
+                favoritesSearchText,
+                favoriteCommodities,
+                (itemId, isChecked) {
+                  setDialogState(() {
+                    if (isChecked) {
+                      favoriteCommodities.add(itemId);
+                    } else {
+                      favoriteCommodities.remove(itemId);
+                    }
+                  });
+                  saveFavorites();
+                },
+                (newSearchText) {
+                  setDialogState(() {
+                    favoritesSearchText = newSearchText; // Update the search text
+                  });
+                },
+                COMMODITY_ID_TO_DISPLAY,
+                allCommodities,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await fetchCommodities(); // Reload the list
+                    setState(() {}); // Force UI update
+                  },
+                  child: const Text("Done"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+  
+  void showAddDialog() {
+    String addCommoditiesSearchText = ""; // Local search text for this dialog
+    List<String> tempSelectedItems = List.from(displayedCommoditiesIds); // Temporary list to track changes
+    List<Map<String, dynamic>> allCommodities = [];
+    
+    // Get all commodities from Firestore
+    _firestore.collection('commodities').get().then((querySnapshot) {
+      allCommodities = querySnapshot.docs.map((doc) {
+        return {'id': doc.id};
+      }).toList();
+    });
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text("Manage Commodities"),
+              content: buildDialogContent(
+                addCommoditiesSearchText,
+                tempSelectedItems,
+                (itemId, isChecked) {
+                  setDialogState(() {
+                    if (isChecked) {
+                      tempSelectedItems.add(itemId);
+                    } else {
+                      tempSelectedItems.remove(itemId);
+                    }
+                  });
+                },
+                (newSearchText) {
+                  setDialogState(() {
+                    addCommoditiesSearchText = newSearchText; // Update the search text
+                  });
+                },
+                COMMODITY_ID_TO_DISPLAY,
+                allCommodities,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    setState(() {
+                      displayedCommoditiesIds = List.from(tempSelectedItems); // Save changes to the main list
+                    });
+                    await saveDisplayedCommodities(); // Persist changes
+                    await fetchCommodities(); // Reload the main list
+                    Navigator.pop(context); // Close the dialog
+                  },
+                  child: const Text("Done"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    // Dispose of the focus node to avoid memory leaks
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    final displayedCommodities = searchText.isEmpty
+        ? filteredCommodities
+        : filteredCommodities.where((commodity) {
+            final commodityId = commodity['id'].toString();
+            final displayInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
+            final displayName = displayInfo?['display_name'] ?? "Unknown Commodity";
+            return displayName.toLowerCase().contains(searchText.toLowerCase());
+          }).toList();
+
+    return Stack(
+      children: [
+        Scaffold(
+          backgroundColor: kLightGray,
+          body: SafeArea(
+            child: Column(
+              children: [
+                // Header section
+                Container(
+                  color: Colors.white,
+                  child: Column(
+                    children: [
+                      // Main header
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            // Selected commodity or logo
+                            if (selectedCommodityId != null) ...[
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Image.asset(
+                                        'assets/commodity_images/${getCommodityImage(selectedCommodityId!)}',
+                                        width: 40,
+                                        height: 40,
+                                        fit: BoxFit.cover,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        COMMODITY_ID_TO_DISPLAY[selectedCommodityId!]?['display_name'] ?? "Unknown",
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w600,
+                                          color: kBlue,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ] else 
+                              const Text(
+                                "Talipapa",
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: kGreen,
+                                ),
+                              ),
+                            
+                            // Action buttons
+                            Row(
+                              children: [
+                                // Search bar or button
+                                if (isSearching)
+                                  Expanded(
+                                    child: Container(
+                                      height: 40,
+                                      width: 150,
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey[200],
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                                        child: TextField(
+                                          controller: _searchController,
+                                          focusNode: _searchFocusNode,
+                                          decoration: const InputDecoration(
+                                            hintText: 'Search...',
+                                            border: InputBorder.none,
+                                            suffixIcon: Icon(Icons.search, color: Colors.grey),
+                                          ),
+                                          onChanged: (value) {
+                                            searchText = value;
+                                            setState(() {});
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                else
+                                  IconButton(
+                                    icon: const Icon(Icons.search, color: kBlue),
+                                    onPressed: () {
+                                      setState(() {
+                                        isSearching = true; // Activate the search bar
+                                      });
+                                      _searchFocusNode.requestFocus(); // Automatically focus the search bar
+                                    },
+                                  ),
+                                IconButton(
+                                  icon: const Icon(Icons.settings, color: kBlue),
+                                  onPressed: () {
+                                    // Navigate to settings page
+                                  },
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      
+                      // Global date indicator
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Text(
+                          "As of: ${globalPriceDate.isNotEmpty ? globalPriceDate : 'Latest Available Data'}",
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[600],
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
+                      ),
+                      
+                      // Forecast buttons
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          _forecastButton("Now", height: 36),
+                          const SizedBox(width: 8),
+                          _forecastButton("Next Week", height: 36),
+                          const SizedBox(width: 8),
+                          _forecastButton("Two Weeks", height: 36),
+                        ],
+                      ),
+                      
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+                
+                // Commodity list section
+                Expanded(
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(20),
+                        topRight: Radius.circular(20),
+                      ),
+                    ),
+                    child: isLoading
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const CircularProgressIndicator(color: kPink),
+                                const SizedBox(height: 16),
+                                Text(
+                                  "Loading commodities...",
+                                  style: TextStyle(
+                                    color: kBlue.withOpacity(0.7),
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : displayedCommodities.isEmpty
+                            ? Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.inbox, size: 70, color: Colors.grey[400]),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      "No commodities to display",
+                                      style: TextStyle(
+                                        color: Colors.grey[600],
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 24),
+                                    ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: kPink,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(20),
+                                        ),
+                                      ),
+                                      onPressed: () {
+                                        showAddDialog();
+                                      },
+                                      child: const Text("Add Commodities"),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : ListView.builder(
+                                padding: const EdgeInsets.only(bottom: 80),
+                                itemCount: displayedCommodities.length,
+                                itemBuilder: (context, index) {
+                                  final commodity = displayedCommodities[index];
+                                  final commodityId = commodity['id'].toString();
+                                  
+                                  return _buildCommodityListItem(commodity, commodityId);
+                                },
+                              ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Bottom action buttons
+          floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+          floatingActionButton: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Display exit "hold mode" button when in hold mode
+              if (isHoldMode)
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.close),
+                  label: const Text("Exit Selection Mode"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.redAccent,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      heldCommodities.clear(); // Clear all selected commodities
+                      isHoldMode = false; // Exit "hold mode"
+                    });
+                  },
+                ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text("Add"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: kPink,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                    onPressed: () {
+                      showAddDialog();
+                    },
+                  ),
+                  const SizedBox(width: 16),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.favorite),
+                    label: const Text("Favorites"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: kPink,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                    onPressed: () {
+                      showFavoritesDialog();
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        
+        // Tutorial overlay
+        if (showTutorial)
+          TutorialOverlay(
+            onClose: _closeTutorial, // Ensure the close method is used
+          ),
+      ],
+    );
+  }
+  
+  // Forecast button widget  
+  Widget _forecastButton(String text, {required double height}) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 100, maxWidth: 130),
+      child: SizedBox(
+        height: height,
+        child: OutlinedButton(
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: selectedForecast == text ? kPink : kDivider),
+            backgroundColor: selectedForecast == text ? kPink.withOpacity(0.2) : Colors.transparent,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+          ),
+          onPressed: () => _onForecastButtonPressed(text),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              text,
+              style: TextStyle(
+                color: selectedForecast == text ? kPink : Colors.grey,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  
+  // This is the onPressed handler for the _forecastButton
+  Future<void> _onForecastButtonPressed(String text) async {
+    setState(() {
+      selectedForecast = text;
+      // Show loading indicator while fetching data
+      isLoading = true;
+    });
+    
+    // Update all commodity prices based on the selected forecast period
+    try {
+      // Fetch the latest prices with the selected forecast period
+      final Map<String, dynamic> latestPricesData = await firestoreService.fetchAllLatestPrices(
+        forecastPeriod: text
+      );
+      
+      // Also fetch the global date for the header
+      if (text == "Now") {
+        // For "Now", update the global date from the latest non-forecast price
+        try {
+          final latestPriceQuery = await _firestore
+            .collection('price_entries')
+            .where('is_forecast', isEqualTo: false)
+            .orderBy('end_date', descending: true)
+            .limit(1)
+            .get();
+            
+          if (latestPriceQuery.docs.isNotEmpty) {
+            final latestPriceDoc = latestPriceQuery.docs.first;
+            final endDate = latestPriceDoc['end_date'] as Timestamp?;
+            
+            if (endDate != null) {
+              final date = endDate.toDate();
+              globalPriceDate = "${date.month}/${date.day}/${date.year}";
+              print("📅 Updated global price date: $globalPriceDate");
+            }
+          }
+        } catch (e) {
+          print("⚠️ Error updating global date: $e");
+        }
+      }
+      
+      // Update the commodities list with the new prices
+      setState(() {
+        // Update each commodity with the new price data
+        for (var i = 0; i < commodities.length; i++) {
+          final commodityId = commodities[i]['id'].toString();
+          if (latestPricesData.containsKey(commodityId)) {
+            final priceData = latestPricesData[commodityId];
+            
+            // Update the price and date
+            commodities[i]['weekly_average_price'] = priceData['price'] ?? 0.0;
+            commodities[i]['price_date'] = priceData['formatted_end_date'] ?? 'No data';
+            commodities[i]['is_forecast'] = priceData['is_forecast'] ?? false;
+          }
+        }
+        
+        // Also update filtered commodities
+        for (var i = 0; i < filteredCommodities.length; i++) {
+          final commodityId = filteredCommodities[i]['id'].toString();
+          if (latestPricesData.containsKey(commodityId)) {
+            final priceData = latestPricesData[commodityId];
+            
+            // Update the price and date
+            filteredCommodities[i]['weekly_average_price'] = priceData['price'] ?? 0.0;
+            filteredCommodities[i]['price_date'] = priceData['formatted_end_date'] ?? 'No data';
+            filteredCommodities[i]['is_forecast'] = priceData['is_forecast'] ?? false;
+          }
+        }
+        
+        // Hide loading indicator
+        isLoading = false;
+      });
+      
+      print("✅ Updated prices with forecast period: $text");
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+      print("❌ Error updating prices with forecast: $e");
+    }
+  }
+  
+  Widget _buildCommodityListItem(Map<String, dynamic> commodity, String commodityId) {
+    final displayInfo = COMMODITY_ID_TO_DISPLAY[commodityId] ?? {'display_name': 'Unknown', 'category': 'Other'};
+    final displayName = displayInfo['display_name'] ?? "Unknown";
+    final category = displayInfo['category'] ?? "Other";
+    
+    final bool showCategory = selectedFilter == null || selectedFilter == "Favorites";
+    final price = commodity['weekly_average_price'] ?? 0.0;
+    
+    return GestureDetector(
+      onLongPress: () {
+        setState(() {
+          isHoldMode = true;
+          heldCommodities.add(commodityId); // Use ID
+          selectedCommodityId = null;
+        });
+      },
+      onTap: () {
+        if (isHoldMode) {
+          setState(() {
+            if (heldCommodities.contains(commodityId)) {
+              heldCommodities.remove(commodityId);
+              if (heldCommodities.isEmpty) {
+                isHoldMode = false;
+              }
+            } else {
+              heldCommodities.add(commodityId);
+            }
+          });
+        } else {
+          setState(() {
+            if (selectedCommodityId == commodityId) {
+              selectedCommodityId = null;
+            } else {
+              selectedCommodityId = commodityId;
+            }
+          });
+        }
+      },
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selectedCommodityId == commodityId
+                ? kPink
+                : heldCommodities.contains(commodityId)
+                    ? kGreen
+                    : Colors.transparent,
+            width: 2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              // Commodity Image
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.asset(
+                  'assets/commodity_images/${getCommodityImage(commodityId)}',
+                  width: 60,
+                  height: 60,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              const SizedBox(width: 16),
+              
+              // Commodity Details
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      displayName,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: kBlue,
+                      ),
+                    ),
+                    if (showCategory)
+                      Text(
+                        category,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: kBlue.withOpacity(0.7),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              
+              // Price and Favorite
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // Price with PHP symbol
+                  Row(
+                    children: [
+                      Text(
+                        "₱${price.toStringAsFixed(2)}",
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: kGreen,
+                        ),
+                      ),
+                    ],
+                  ),
+                  
+                  // Display "as of: date" if date is older than global date
+                  if (commodity['price_date'] != null && 
+                      commodity['price_date'].toString().isNotEmpty &&
+                      commodity['price_date'].toString() != "No data" &&
+                      commodity['price_date'].toString() != globalPriceDate)
+                    Text(
+                      "as of: ${commodity['price_date']}",
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w300,
+                        fontSize: 12,
+                        color: kBlue,
+                      ),
+                    ),
+                    
+                  // Display (Forecast) tag if the price is a forecast
+                  if (commodity['is_forecast'] == true)
+                    const Text(
+                      "(Forecast)",
+                      style: TextStyle(
+                        fontWeight: FontWeight.w300,
+                        fontSize: 12,
+                        color: Colors.orange,
+                      ),
+                    ),
+                    
+                  // Favorite icon
+                  IconButton(
+                    icon: Icon(
+                      favoriteCommodities.contains(commodityId)
+                          ? Icons.favorite
+                          : Icons.favorite_border,
+                      color: favoriteCommodities.contains(commodityId)
+                          ? kPink
+                          : kBlue.withOpacity(0.3),
+                      size: 20,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        if (favoriteCommodities.contains(commodityId)) {
+                          favoriteCommodities.remove(commodityId);
+                        } else {
+                          favoriteCommodities.add(commodityId);
+                        }
+                      });
+                      saveFavorites();
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+  
+  // Action button for selection mode
+  Widget _actionButton({
+    required IconData icon,
+    required String text,
+    required VoidCallback onPressed,
+    Color? color,
+  }) {
+    return ElevatedButton.icon(
+      icon: Icon(icon, size: 16),
+      label: Text(text),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color ?? kBlue,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+      onPressed: onPressed,
+    );
+  }
+  
+  List<Map<String, dynamic>> _applyFilter(List<Map<String, dynamic>> list, List<Map<String, dynamic>> all) {
+    if (selectedFilter == null || selectedFilter == "None") {
+      return List.from(list);
+    } else if (selectedFilter == "Favorites") {
+      return list.where((commodity) {
+        final commodityId = commodity['id'].toString();
+        return favoriteCommodities.contains(commodityId);
+      }).toList();
+    } else {
+      return list.where((commodity) {
+        final commodityId = commodity['id'].toString();
+        final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
+        if (typeInfo == null) return false;
+        
+        final category = typeInfo['category'] ?? "";
+        return category.toLowerCase() == selectedFilter?.toLowerCase();
+      }).toList();
+    }
+  }
+}
