@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart'; // Import for SVG support
+import 'package:flutter_svg/flutter_svg.dart'; // SVG support
+import 'package:http/http.dart' as http;
 import 'constants.dart';
 import 'custom_bottom_navbar.dart';
 
@@ -10,29 +12,98 @@ class ChatbotPage extends StatefulWidget {
 
 class _ChatbotPageState extends State<ChatbotPage> {
   final TextEditingController _messageController = TextEditingController();
-  final List<Map<String, String>> _messages = [
-    {"bot": "Welcome to Talipapa Chat! How can I assist you today?"} // Initial chatbot message
-  ]; // List to store messages
 
-  void _sendMessage() {
-    final message = _messageController.text.trim();
-    if (message.isNotEmpty) {
-      setState(() {
-        _messages.add({"user": message}); // Add user message
-        _messages.add({"bot": _getBotResponse(message)}); // Add bot response
-      });
-      _messageController.clear(); // Clear the input field
+  final List<Map<String, String>> _messages = [];
+
+  bool _isLoading = false;
+
+  // Build full prompt in mistral-v7 format
+String _buildPrompt() {
+  final buffer = StringBuffer();
+
+  // Inject context as system instruction
+  buffer.writeln('<|system|> You are Talipapa, a helpful chatbot in a mobile app that forecasts average market prices of goods in the Philippines. Provide friendly and accurate responses.');
+
+  for (var message in _messages) {
+    if (message.containsKey('user')) {
+      buffer.writeln('<|user|> ${message['user']}');
+    } else if (message.containsKey('bot')) {
+      buffer.writeln('<|assistant|> ${message['bot']}');
     }
   }
 
-  String _getBotResponse(String userMessage) {
-    // Basic bot response logic
-    if (userMessage.toLowerCase().contains("hello")) {
-      return "Hi there! How can I assist you today?";
-    } else if (userMessage.toLowerCase().contains("price")) {
-      return "You can check the latest prices in the app.";
-    } else {
-      return "I'm sorry, I didn't understand that. Can you rephrase?";
+  // Final assistant cue with no newline
+  buffer.write('<|assistant|>');
+
+  return buffer.toString();
+}
+
+  // Clean the assistant's raw response by removing </s> and similar tags
+  String _cleanResponse(String raw) {
+    return raw.replaceAll(RegExp(r'</?s>'), '').trim();
+  }
+
+  Future<void> _sendMessage() async {
+    final message = _messageController.text.trim();
+    if (message.isEmpty || _isLoading) return;
+
+    setState(() {
+      _messages.add({"user": message});
+      _isLoading = true;
+    });
+
+    _messageController.clear();
+
+    try {
+      final prompt = _buildPrompt();
+
+      // TODO: Change to your llama server URL & port
+      final url = Uri.parse('http://192.168.0.12:8001/completions');
+
+      final body = jsonEncode({
+        "prompt": prompt,
+        // "n_keep": 0,
+        "cache_prompt": false,
+        "max_tokens": 100,
+        "temperature": 0.7,
+        "stop": ["<|user|>", "<|assistant|>"],
+        "model": "capybarahermes-2.5-mistral-7b.Q4_K_M.gguf"
+      });
+
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: body,
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        print("Raw response: ${response.body}");
+        final rawText = data['content'] as String?;
+
+        if (rawText == null || rawText.isEmpty) {
+          throw Exception('Empty response from server');
+        }
+
+        final botReply = _cleanResponse(rawText);
+
+        setState(() {
+          _messages.add({"bot": botReply});
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _messages.add({
+            "bot": "Server error: ${response.statusCode}. Please try again later."
+          });
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _messages.add({"bot": "Error fetching bot response: $e"});
+        _isLoading = false;
+      });
     }
   }
 
@@ -40,7 +111,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: PreferredSize(
-        preferredSize: Size.fromHeight(120), // Adjusted height to match or slightly exceed main.dart
+        preferredSize: Size.fromHeight(100), // Increased header height
         child: AppBar(
           backgroundColor: kGreen,
           title: Column(
@@ -51,7 +122,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
                 height: 28,
                 colorFilter: ColorFilter.mode(kBlue, BlendMode.srcIn),
               ), // Fish icon
-              SizedBox(height: 12), // Increased spacing to prevent overlap
+              SizedBox(height: 8), // Increased spacing
               Text(
                 "Talipapa Chat",
                 style: TextStyle(
@@ -70,53 +141,80 @@ class _ChatbotPageState extends State<ChatbotPage> {
         children: [
           Expanded(
             child: ListView.builder(
-              padding: EdgeInsets.all(16),
-              itemCount: _messages.length,
-              itemBuilder: (context, index) {
-                final message = _messages[index];
-                final isUser = message.containsKey("user");
-                final isFirstBotMessage = index == 0 && message.containsKey("bot");
-
-                return Align(
-                  alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                  child: CustomPaint(
-                    painter: ChatBubblePainter(
-                      color: isFirstBotMessage ? kBlue : (isUser ? kGreen : kPink),
-                      isUser: isUser,
-                    ),
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.7, // Limit bubble width to 70% of screen width
-                      ),
-                      child: Container(
-                        margin: EdgeInsets.symmetric(vertical: 4),
-                        padding: EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: isFirstBotMessage ? kBlue : (isUser ? kGreen : kPink),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          isUser ? message["user"]! : message["bot"]!,
-                          style: TextStyle(
-                            color: isFirstBotMessage ? Colors.white : (isUser ? kBlue : Colors.white),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
+  padding: EdgeInsets.all(16),
+  itemCount: _messages.length + 1, // Add 1 for static welcome
+  itemBuilder: (context, index) {
+    if (index == 0) {
+      // Static welcome message
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: CustomPaint(
+          painter: ChatBubblePainter(color: kBlue, isUser: false),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.7,
+            ),
+            child: Container(
+              margin: EdgeInsets.symmetric(vertical: 4),
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: kBlue,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                "Welcome to Talipapa Chat! How can I assist you today?",
+                style: TextStyle(color: Colors.white),
+              ),
             ),
           ),
+        ),
+      );
+    }
+
+    // Adjust for index offset
+    final message = _messages[index - 1];
+    final isUser = message.containsKey("user");
+
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: CustomPaint(
+        painter: ChatBubblePainter(
+          color: isUser ? kGreen : kBlue,
+          isUser: isUser,
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.7,
+          ),
+          child: Container(
+            margin: EdgeInsets.symmetric(vertical: 4),
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isUser ? kGreen : kBlue,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              isUser ? message["user"]! : message["bot"]!,
+              style: TextStyle(
+                color: isUser ? kBlue : Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  },
+)
+          ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16), // Add spacing above the navbar
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Row(
               children: [
                 Expanded(
                   child: Container(
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(30), // Rounded input bar
+                      borderRadius: BorderRadius.circular(30),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black12,
@@ -130,11 +228,14 @@ class _ChatbotPageState extends State<ChatbotPage> {
                         Expanded(
                           child: TextField(
                             controller: _messageController,
+                            enabled: !_isLoading,
                             decoration: InputDecoration(
                               hintText: "Type your message...",
                               border: InputBorder.none,
-                              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              contentPadding:
+                                  EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                             ),
+                            onSubmitted: (_) => _sendMessage(),
                           ),
                         ),
                         Padding(
@@ -145,11 +246,11 @@ class _ChatbotPageState extends State<ChatbotPage> {
                               width: 40,
                               height: 40,
                               decoration: BoxDecoration(
-                                color: kGreen, // Green background for the send icon
-                                shape: BoxShape.circle, // Circular send icon
+                                color: _isLoading ? kGreen.withOpacity(0.5) : kGreen,
+                                shape: BoxShape.circle,
                               ),
                               child: Icon(
-                                Icons.arrow_upward, // Thin upward arrow
+                                Icons.arrow_upward,
                                 color: Colors.white,
                                 size: 20,
                               ),
@@ -198,7 +299,5 @@ class ChatBubblePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return false;
-  }
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
