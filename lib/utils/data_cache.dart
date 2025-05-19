@@ -7,6 +7,7 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
   static const String _lastFetchTimeKey = 'last_fetch_time';
   static const String _selectedForecastKey = 'selected_forecast';
   static const String _selectedCommodityKey = 'selected_commodity_details';
+  static const String _selectedSortKey = 'selected_sort';
   
   // Cache duration in minutes
   static const int _cacheDuration = 30; // 30 minutes by default
@@ -141,16 +142,53 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
     } catch (e) {
       print('Error getting selected commodity details from cache: $e');
       return null;
-    }
-  }
-  
+    }  }
   // Force refresh cache
   static Future<void> invalidateCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      // Store sorting preference before invalidating cache
+      final sortPreference = await getSelectedSort();
+      
+      // Remove all cache-related keys for a complete reset
       await prefs.remove(_lastFetchTimeKey);
+      await prefs.remove(_commoditiesKey);
+      await prefs.remove(_filteredCommoditiesKey);
+      await prefs.remove(_globalPriceDateKey);
+      
+      // Restore sorting preference after cache reset
+      if (sortPreference != null) {
+        await saveSelectedSort(sortPreference);
+      }
+      
+      // Keep selected forecast and commodity for better UX
+      print('✅ Cache completely invalidated - next fetch will be from Firestore');
+      print('✅ Preserved sort preference: $sortPreference');
     } catch (e) {
-      print('Error invalidating cache: $e');
+      print('❌ Error invalidating cache: $e');
+    }
+  }
+  
+  // Save selected sort option
+  static Future<void> saveSelectedSort(String? sort) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_selectedSortKey, sort ?? "None");
+      print('✅ Saved selected sort to cache: ${sort ?? "None"}');
+    } catch (e) {
+      print('❌ Error saving selected sort to cache: $e');
+    }
+  }
+  
+  // Get selected sort option
+  static Future<String?> getSelectedSort() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final sortValue = prefs.getString(_selectedSortKey);
+      return sortValue == "None" ? null : sortValue;
+    } catch (e) {
+      print('❌ Error getting selected sort from cache: $e');
+      return null;
     }
   }
 }

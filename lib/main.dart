@@ -74,13 +74,13 @@ class _HomePageState extends State<HomePage> {
   String? deviceUUID;
   String globalPriceDate = ""; // Store the latest global price date
   bool _dataInitialized = false; // Track if data has been initialized
-
   @override
   void initState() {
     super.initState();
     _searchFocusNode.addListener(() {
       if (!_searchFocusNode.hasFocus && isSearching) {
         setState(() {
+          // Only change the isSearching state, but keep the searchText
           isSearching = false;
         });
       }
@@ -126,8 +126,7 @@ class _HomePageState extends State<HomePage> {
       // Perform a background fetch to update cache without blocking UI
       Future.delayed(Duration.zero, () => fetchCommodities());
     }
-  }
-  // Load data from cache
+  }  // Load data from cache
   Future<bool> _loadFromCache() async {
     try {
       // Check if cache is valid
@@ -150,6 +149,7 @@ class _HomePageState extends State<HomePage> {
       
       final cachedGlobalPriceDate = await DataCache.getGlobalPriceDate();
       final cachedForecast = await DataCache.getSelectedForecast();
+      final cachedSort = await DataCache.getSelectedSort();
       
       // Validate cached data
       if (typedCommodities.isEmpty) {
@@ -176,10 +176,12 @@ class _HomePageState extends State<HomePage> {
         filteredCommodities = effectiveFilteredCommodities.cast<Map<String, dynamic>>();
         globalPriceDate = effectiveGlobalPriceDate;
         selectedForecast = effectiveForecast;
+        selectedSort = cachedSort;
       });
       
       print("✅ Loaded ${commodities.length} commodities and ${filteredCommodities.length} filtered commodities from cache");
       print("✅ Using cached forecast period: $selectedForecast");
+      print("✅ Using cached sort option: $selectedSort");
       
       return true;
     } catch (e) {
@@ -279,8 +281,7 @@ class _HomePageState extends State<HomePage> {
       DataCache.saveFilteredCommodities(filteredCommodities);
     });
   }
-  
-  // Apply sorting to the filtered list
+    // Apply sorting to the filtered list
   void _applySorting() {
     if (selectedSort == "Name") {
       filteredCommodities.sort((a, b) {
@@ -301,6 +302,9 @@ class _HomePageState extends State<HomePage> {
         return priceB.compareTo(priceA);
       });
     }
+    
+    // Cache the sort preference
+    DataCache.saveSelectedSort(selectedSort);
   }// Fetch commodities from Firestore
   Future<void> fetchCommodities() async {
     try {
@@ -340,26 +344,28 @@ class _HomePageState extends State<HomePage> {
         };
         
         try {          // Get price from the batch fetch we did earlier
-          if (allLatestPrices.containsKey(commodityId)) {
-            final latestPriceData = allLatestPrices[commodityId] as Map<String, dynamic>;
+          if (allLatestPrices.containsKey(commodityId)) {            final latestPriceData = allLatestPrices[commodityId] as Map<String, dynamic>;
             final price = latestPriceData['price'] ?? 0.0;
             final formattedDate = latestPriceData['formatted_end_date'] ?? "";
             final isForecast = latestPriceData['is_forecast'] ?? false;
             final isGlobalDate = latestPriceData['is_global_date'] ?? false;
+            final forecastPeriod = latestPriceData['forecast_period'] ?? "";
             
             // Add more specific date tag for forecasts if needed
             String dateDisplay = formattedDate;
             if (isForecast && selectedForecast != "Now") {
-              dateDisplay = "$formattedDate (${selectedForecast})";
+              // Use the actual forecast period from the data rather than the selectedForecast
+              dateDisplay = "$formattedDate ($forecastPeriod)";
             }
             
             // Update commodity entry with price info
             commodityEntry['weekly_average_price'] = price;
             commodityEntry['price_date'] = dateDisplay; // Use enhanced dateDisplay that includes forecast period
             commodityEntry['is_forecast'] = isForecast;
+            commodityEntry['forecast_period'] = forecastPeriod; // Store the forecast period
             commodityEntry['is_global_date'] = isGlobalDate; // Store whether this price is from the global date
             
-            print("💰 Price data for ${COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? commodityId}: ₱$price ($formattedDate) ${isForecast ? '(Forecast)' : ''} ${isGlobalDate ? '[GLOBAL DATE]' : ''}");
+            print("💰 Price data for ${COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? commodityId}: ₱$price ($formattedDate) ${isForecast ? '(Forecast - $forecastPeriod)' : ''} ${isGlobalDate ? '[GLOBAL DATE]' : ''}");
           } else {
             print("ℹ️ No price data found in batch for commodity $commodityId (${COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? 'Unknown'})");
           }
@@ -379,7 +385,12 @@ class _HomePageState extends State<HomePage> {
           if (!displayedCommoditiesIds.contains(favorite)) {
             displayedCommoditiesIds.add(favorite);
           }
-        }        filteredCommodities = _applyFilter(commodities, allCommodities);
+        }
+        
+        filteredCommodities = _applyFilter(commodities, allCommodities);
+        
+        // Apply sorting to maintain the selected sort option
+        _applySorting();
         
         // Debug log the commodity data
         if (kDebugMode) {
@@ -444,68 +455,33 @@ class _HomePageState extends State<HomePage> {
     });
     print("Favorites loaded: $favoriteCommodities");
   }
-
   Future<void> saveState() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('selectedFilter', selectedFilter ?? "None");
-    await prefs.setString('selectedSort', selectedSort ?? "None");
-    print("State saved: Filter = $selectedFilter, Sort = $selectedSort");
-  }
-  Future<void> loadState() async {
-    final prefs = await SharedPreferences.getInstance();
     
+    // Save sort using the DataCache method instead
+    await DataCache.saveSelectedSort(selectedSort);
+    
+    print("State saved: Filter = $selectedFilter, Sort = $selectedSort");
+  }  Future<void> loadState() async {
     try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Load filter from SharedPreferences (keeping compatibility with old implementation)
+      final filterValue = prefs.getString('selectedFilter');
+      
+      // Load sort from DataCache (new implementation)
+      final sortValue = await DataCache.getSelectedSort();
+      
       setState(() {
-        selectedFilter = prefs.getString('selectedFilter') == "None" ? null : prefs.getString('selectedFilter');
-        selectedSort = prefs.getString('selectedSort') == "None" ? null : prefs.getString('selectedSort');
+        selectedFilter = filterValue == "None" ? null : filterValue;
+        selectedSort = sortValue;
       });
 
-      // Apply the loaded filter and sort
-      if (selectedFilter == null) {
-        filteredCommodities = List.from(commodities);
-      } else if (selectedFilter == "Favorites") {
-        // Update the filter logic for "Favorites"
-        filteredCommodities = commodities.where((commodity) {
-          final commodityId = commodity['id'].toString();
-          return favoriteCommodities.contains(commodityId);
-        }).toList();
-      } else {
-        // Update filter logic for commodity types - now using category
-        filteredCommodities = commodities.where((commodity) {
-          final commodityId = commodity['id'].toString();
-          final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
-          if (typeInfo == null) return false;
-          
-          final category = typeInfo['category'] ?? "";
-          return category.toLowerCase() == selectedFilter?.toLowerCase();
-        }).toList();
-      }
-
-      // Apply sort if needed
-      if (selectedSort == "Name") {
-        filteredCommodities.sort((a, b) {
-          final nameA = COMMODITY_ID_TO_DISPLAY[a['id'].toString()]?['display_name'] ?? "";
-          final nameB = COMMODITY_ID_TO_DISPLAY[b['id'].toString()]?['display_name'] ?? "";
-          return nameA.compareTo(nameB);
-        });
-      } else if (selectedSort == "Price (Low to High)") {
-        filteredCommodities.sort((a, b) {
-          double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
-          double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
-          return priceA.compareTo(priceB);
-        });
-      } else if (selectedSort == "Price (High to Low)") {
-        filteredCommodities.sort((a, b) {
-          double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
-          double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
-          return priceB.compareTo(priceA);
-        });
-      }
-      
-      // Cache the filtered and sorted commodities
-      DataCache.saveFilteredCommodities(filteredCommodities);
-
       print("State loaded: Filter = $selectedFilter, Sort = $selectedSort");
+      
+      // Apply the loaded filter and sort
+      _applyFiltersOnly();
     } catch (e) {
       print("Error loading state: $e");
     }
@@ -612,21 +588,25 @@ class _HomePageState extends State<HomePage> {
     _searchFocusNode.dispose();
     super.dispose();
   }
-
   @override
   Widget build(BuildContext context) {
-    final displayedCommodities = searchText.isEmpty
+    // Get commodities to display based on search text
+    List<Map<String, dynamic>> displayedCommodities = searchText.isEmpty
         ? filteredCommodities
         : filteredCommodities.where((commodity) {
             // Get the display name from the mapping and then check if it contains the search text
             final displayName = COMMODITY_ID_TO_DISPLAY[commodity['id'].toString()]?['display_name'] ?? "";
             return displayName.toLowerCase().contains(searchText.toLowerCase());
           }).toList();
-
-    return GestureDetector(
+    
+    // Always apply sorting to displayed commodities to maintain consistent ordering
+    if (selectedSort != null && displayedCommodities.isNotEmpty) {
+      _applySortToList(displayedCommodities);
+    }return GestureDetector(
       onTap: () {
         if (isSearching) {
           setState(() {
+            // Only unfocus the search field but keep the text and search visible
             isSearching = false;
             _searchFocusNode.unfocus();
           });
@@ -671,32 +651,52 @@ class _HomePageState extends State<HomePage> {
               ],
             ],
           ),
-          actions: [
-            if (isSearching)
+          actions: [            if (isSearching || searchText.isNotEmpty)
               Container(
                 width: MediaQuery.of(context).size.width * 0.3,
                 margin: EdgeInsets.only(right: 8),
-                child: TextField(
-                  controller: _searchController,
-                  focusNode: _searchFocusNode,
-                  onChanged: (value) {
-                    setState(() {
-                      searchText = value;
-                    });
-                  },
-                  decoration: InputDecoration(
-                    hintText: 'Search...',
-                    hintStyle: TextStyle(color: kBlue, fontSize: 16),
-                    enabledBorder: UnderlineInputBorder(
-                      borderSide: BorderSide(color: kBlue),
+                child: Stack(
+                  alignment: Alignment.centerRight,
+                  children: [
+                    TextField(
+                      controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      onChanged: (value) {
+                        setState(() {
+                          searchText = value;
+                        });
+                      },
+                      decoration: InputDecoration(
+                        hintText: 'Search...',
+                        hintStyle: TextStyle(color: kBlue, fontSize: 16),
+                        enabledBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: kBlue),
+                        ),
+                        focusedBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: kBlue),
+                        ),
+                        isDense: true,
+                        contentPadding: EdgeInsets.only(left: 8, bottom: 2, right: searchText.isNotEmpty ? 20 : 0),
+                        border: InputBorder.none,
+                      ),
+                      style: TextStyle(color: kBlue, fontSize: 16),
                     ),
-                    focusedBorder: UnderlineInputBorder(
-                      borderSide: BorderSide(color: kBlue),
-                    ),
-                    isDense: true,
-                    contentPadding: EdgeInsets.only(left: 8, bottom: 2),
-                  ),
-                  style: TextStyle(color: kBlue, fontSize: 16),
+                    if (searchText.isNotEmpty)
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _searchController.clear();
+                            searchText = '';
+                          });
+                        },
+                        child: Container(
+                          width: 20,
+                          height: 20,
+                          alignment: Alignment.center,
+                          child: Icon(Icons.clear, color: kBlue, size: 16),
+                        ),
+                      ),
+                  ],
                 ),
               )
             else
@@ -724,17 +724,16 @@ class _HomePageState extends State<HomePage> {
         body: Stack(
           children: [
             Column(
-              children: [
-              // Global date display
+              children: [              // Global date display - left aligned
                 Container(
                   width: double.infinity,
                   color: Colors.white,
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  alignment: Alignment.center,
+                  padding: EdgeInsets.only(left: 16, top: 8, bottom: 8),
+                  alignment: Alignment.centerLeft,
                   child: Text(
                     globalPriceDate.isEmpty 
                         ? "Updating price data..." 
-                        : "As of: $globalPriceDate",
+                        : "Latest price watch data: $globalPriceDate",
                     style: TextStyle(
                       color: kBlue,
                       fontSize: 12,
@@ -742,9 +741,9 @@ class _HomePageState extends State<HomePage> {
                     ),
                   ),
                 ),
-                Container(
-                  width: double.infinity,
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                // No space or margin between containers
+                Container(                  width: double.infinity,
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 16), // Adjusted padding
                   decoration: BoxDecoration(
                     color: Colors.white,
                     boxShadow: [
@@ -756,20 +755,25 @@ class _HomePageState extends State<HomePage> {
                     ],
                   ),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                        height: 200,
-                        width: MediaQuery.of(context).size.width * 0.85,
+                    crossAxisAlignment: CrossAxisAlignment.center,                    children: [                      Container(
+                        height: 200, // Return to more rectangular dimensions
+                        width: MediaQuery.of(context).size.width * 0.95, // Use almost the full width
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Colors.white, const Color(0xFFF8F8FF)],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
                           boxShadow: [
                             BoxShadow(
                               color: Colors.black12,
-                              blurRadius: 6,
-                              offset: Offset(0, 2),
+                              blurRadius: 8,
+                              spreadRadius: 1,
+                              offset: Offset(0, 3),
                             ),
                           ],
+                          border: Border.all(color: Colors.grey.shade200, width: 1.5),
                         ),
                         child: selectedCommodityId == null
                             ? Center(child: Text("Select a commodity to see price graph"))
@@ -839,43 +843,88 @@ class _HomePageState extends State<HomePage> {
                                   // Get the most recent date and price
                                   final latestPrice = actualPrices.first; // First item after descending sort
                                   final price = latestPrice['price'] ?? 0.0;
-                                  final formattedDate = latestPrice['formatted_end_date'] ?? "-";
-                                  
-                                  // Prepare the display prices based on selected forecast view
+                                  final formattedDate = latestPrice['formatted_end_date'] ?? "-";                                  // Prepare the display prices based on selected forecast view
                                   List<Map<String, dynamic>> displayPrices = [];
                                   
                                   if (selectedForecast == "Now") {
-                                    // Only show the most recent price
-                                    displayPrices = [latestPrice];
-                                  } else if (selectedForecast == "Next Week") {
-                                    // Show all available actual prices plus 1-week forecasts
-                                    displayPrices = List.from(actualPrices);
+                                    // For "Now", show past two weeks of actual prices
+                                    // Sort all actual prices by date (ascending)
+                                    actualPrices.sort((a, b) {
+                                      final aDate = a['end_date'] as Timestamp;
+                                      final bDate = b['end_date'] as Timestamp;
+                                      return aDate.compareTo(bDate); // Sort ascending for chart
+                                    });
                                     
-                                    // Add forecast data if needed
+                                    // Take the most recent 2-4 actual prices to show the past two weeks
+                                    if (actualPrices.length > 2) {
+                                      displayPrices = actualPrices.sublist(actualPrices.length - 4 > 0 ? 
+                                                                          actualPrices.length - 4 : 0);
+                                    } else {
+                                      displayPrices = List.from(actualPrices);
+                                    }
+                                  } else if (selectedForecast == "Next Week") {
+                                    // For "Next Week", show current price and one-week forecast only
+                                    displayPrices = [];
+                                    
+                                    // Add the most recent actual price
+                                    if (actualPrices.isNotEmpty) {
+                                      displayPrices.add(actualPrices.first); // Already sorted to have most recent first
+                                    }
+                                    
+                                    // Add one-week forecast
+                                    final oneWeekForecasts = snapshot.data!
+                                        .where((p) => p['is_forecast'] == true)
+                                        .toList();
+                                        
+                                    // Filter to get only "Next Week" forecasts
+                                    final nextWeekForecasts = oneWeekForecasts.where((p) {
+                                      // Check if forecast is for next week based on date
+                                      if (p['end_date'] != null) {
+                                        final forecastDate = (p['end_date'] as Timestamp).toDate();
+                                        final today = DateTime.now();
+                                        final daysDifference = forecastDate.difference(today).inDays;
+                                        return daysDifference <= 7; // Within a week
+                                      }
+                                      return false;
+                                    }).toList();
+                                    
+                                    if (nextWeekForecasts.isNotEmpty) {
+                                      // Sort forecasts by date
+                                      nextWeekForecasts.sort((a, b) {
+                                        final aDate = a['end_date'] as Timestamp;
+                                        final bDate = b['end_date'] as Timestamp;
+                                        return aDate.compareTo(bDate);
+                                      });
+                                      
+                                      // Add first next week forecast
+                                      displayPrices.add(nextWeekForecasts.first);
+                                    }
+                                  } else {
+                                    // For "Two Weeks", show current + one-week + two-weeks forecasts
+                                    displayPrices = [];
+                                    
+                                    // Add the most recent actual price
+                                    if (actualPrices.isNotEmpty) {
+                                      displayPrices.add(actualPrices.first);
+                                    }
+                                    
+                                    // Add all forecast prices
                                     final forecastPrices = snapshot.data!
                                         .where((p) => p['is_forecast'] == true)
                                         .toList();
                                     
-                                    if (forecastPrices.isNotEmpty) {
-                                      displayPrices.addAll(forecastPrices);
-                                      
-                                      // Sort by date for proper display
-                                      displayPrices.sort((a, b) {
-                                        final aDate = a['start_date'] as Timestamp;
-                                        final bDate = b['start_date'] as Timestamp;
-                                        return aDate.compareTo(bDate); // Sort ascending for chart
-                                      });
-                                    }
-                                  } else {
-                                    // Two Weeks - show all prices plus forecasts
-                                    displayPrices = List.from(snapshot.data!);
-                                    
-                                    // Sort by date for proper display
-                                    displayPrices.sort((a, b) {
-                                      final aDate = a['start_date'] as Timestamp;
-                                      final bDate = b['start_date'] as Timestamp;
-                                      return aDate.compareTo(bDate); // Sort ascending for chart
+                                    // Sort forecasts by date
+                                    forecastPrices.sort((a, b) {
+                                      final aDate = a['end_date'] as Timestamp;
+                                      final bDate = b['end_date'] as Timestamp;
+                                      return aDate.compareTo(bDate);
                                     });
+                                    
+                                    // Add forecasts (limit to 2 to show one-week and two-weeks)
+                                    if (forecastPrices.isNotEmpty) {
+                                      for (int i = 0; i < (forecastPrices.length > 2 ? 2 : forecastPrices.length); i++) {
+                                        displayPrices.add(forecastPrices[i]);
+                                      }                                    }
                                   }
 
                                   // Create chart spots
@@ -883,32 +932,103 @@ class _HomePageState extends State<HomePage> {
                                   for (int i = 0; i < displayPrices.length; i++) {
                                     final price = double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0;
                                     spots.add(FlSpot(i.toDouble(), price));
-                                  }
-
-                                  return Column(
-                                    children: [
+                                  }                                  return Column(
+                                    children: [                                      // Add "As of" date above the chart with nicer styling
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                        margin: const EdgeInsets.only(bottom: 8),
+                                        decoration: BoxDecoration(
+                                          color: kBlue.withOpacity(0.07),
+                                          borderRadius: BorderRadius.circular(20),
+                                          border: Border.all(color: kBlue.withOpacity(0.2), width: 0.8),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min, // Compact size for centered row
+                                          children: [
+                                            Icon(Icons.calendar_today, size: 12, color: kBlue.withOpacity(0.7)),
+                                            SizedBox(width: 4),
+                                            Text(
+                                              "As of: $formattedDate",
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: kBlue.withOpacity(0.9),
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
                                       Expanded(
                                         child: LineChart(
                                           LineChartData(
-                                            lineBarsData: [
-                                              LineChartBarData(
+                                            lineBarsData: [                                              LineChartBarData(
                                                 spots: spots,
                                                 isCurved: true,
-                                                barWidth: 3,
+                                                curveSmoothness: 0.35, // Smoother curve
+                                                barWidth: 3.5,
                                                 color: kPink,
-                                                dotData: FlDotData(show: true),
-                                              ),
-                                            ],
-                                            titlesData: FlTitlesData(
-                                              leftTitles: AxisTitles(
-                                                sideTitles: SideTitles(
-                                                  showTitles: true,
-                                                  reservedSize: 30,
+                                                isStrokeCapRound: true,
+                                                belowBarData: BarAreaData(
+                                                  show: true,
+                                                  gradient: LinearGradient(
+                                                    begin: Alignment.topCenter,
+                                                    end: Alignment.bottomCenter,
+                                                    colors: [
+                                                      kPink.withOpacity(0.3),
+                                                      kPink.withOpacity(0.02),
+                                                    ],
+                                                  ),
+                                                ),
+                                                // Highlight points with different colors based on forecast
+                                                dotData: FlDotData(
+                                                  show: true,
+                                                  getDotPainter: (spot, percent, barData, index) {
+                                                    final isForecast = index < displayPrices.length ? 
+                                                        displayPrices[index]['is_forecast'] == true : false;
+                                                    
+                                                    // Highlight the latest actual price (current point)
+                                                    final isLatestActual = index < displayPrices.length &&
+                                                        displayPrices[index]['is_forecast'] != true &&
+                                                        (selectedForecast != "Now" || index == displayPrices.length - 1);
+                                                        
+                                                    Color dotColor = isForecast ? kPink : kBlue;
+                                                    Color strokeColor = Colors.white;
+                                                    double dotSize = isLatestActual ? 6.5 : 5.0;
+                                                    double strokeWidth = isLatestActual ? 2.0 : 1.5;
+                                                    
+                                                    return FlDotCirclePainter(
+                                                      radius: dotSize,
+                                                      color: dotColor,
+                                                      strokeWidth: strokeWidth,
+                                                      strokeColor: strokeColor,
+                                                    );
+                                                  }
                                                 ),
                                               ),
-                                              bottomTitles: AxisTitles(
+                                            ],
+                                            titlesData: FlTitlesData(                                              leftTitles: AxisTitles(
                                                 sideTitles: SideTitles(
                                                   showTitles: true,
+                                                  reservedSize: 40,
+                                                  interval: 20,
+                                                  getTitlesWidget: (value, meta) {
+                                                    return Padding(
+                                                      padding: const EdgeInsets.only(right: 6),
+                                                      child: Text(
+                                                        '₱${value.toInt()}',
+                                                        style: TextStyle(
+                                                          color: kBlue.withOpacity(0.7),
+                                                          fontSize: 9,
+                                                          fontWeight: FontWeight.w500,
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                ),
+                                              ),bottomTitles: AxisTitles(
+                                                sideTitles: SideTitles(
+                                                  showTitles: true,
+                                                  reservedSize: 25, // Add more space for the titles
                                                   getTitlesWidget: (value, meta) {
                                                     int idx = value.toInt();
                                                     if (idx < 0 || idx >= displayPrices.length) return Container();
@@ -921,14 +1041,25 @@ class _HomePageState extends State<HomePage> {
                                                     final isForecast = displayPrices[idx]['is_forecast'] == true;
                                                     final dateText = "${date.month}/${date.day}";
                                                     
-                                                    return Padding(
-                                                      padding: const EdgeInsets.only(top: 5.0),
-                                                      child: Text(
-                                                        dateText, 
-                                                        style: TextStyle(
-                                                          fontSize: 10,
-                                                          color: isForecast ? kPink : kBlue,
-                                                          fontWeight: isForecast ? FontWeight.bold : FontWeight.normal,
+                                                    // Only show every other date if more than 3 dates
+                                                    if (displayPrices.length > 3 && idx % 2 != 0 && idx != displayPrices.length - 1) {
+                                                      return Container(); // Skip every other date
+                                                    }
+                                                      return Padding(
+                                                      padding: const EdgeInsets.only(top: 6.0),
+                                                      child: Container(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                                        decoration: BoxDecoration(
+                                                          color: isForecast ? kPink.withOpacity(0.1) : kBlue.withOpacity(0.1),
+                                                          borderRadius: BorderRadius.circular(4),
+                                                        ),
+                                                        child: Text(
+                                                          dateText, 
+                                                          style: TextStyle(
+                                                            fontSize: 9,
+                                                            color: isForecast ? kPink : kBlue,
+                                                            fontWeight: isForecast ? FontWeight.w600 : FontWeight.w500,
+                                                          ),
                                                         ),
                                                       ),
                                                     );
@@ -938,16 +1069,37 @@ class _HomePageState extends State<HomePage> {
                                               ),
                                               topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
                                               rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                            ),                                            borderData: FlBorderData(
+                                              show: true,
+                                              border: Border.all(color: Colors.grey.shade300, width: 1),
                                             ),
-                                            borderData: FlBorderData(show: false),
                                             gridData: FlGridData(
                                               show: true,
                                               horizontalInterval: 20,
-                                              drawVerticalLine: false,
-                                            ),
-                                            lineTouchData: LineTouchData(
+                                              verticalInterval: 1,
+                                              drawVerticalLine: true,
+                                              checkToShowHorizontalLine: (value) => true,
+                                              getDrawingHorizontalLine: (value) {
+                                                return FlLine(
+                                                  color: Colors.grey.shade200,
+                                                  strokeWidth: value % 40 == 0 ? 1.2 : 0.8,
+                                                  dashArray: value % 40 == 0 ? null : [3, 3],
+                                                );
+                                              },
+                                              getDrawingVerticalLine: (value) {
+                                                return FlLine(
+                                                  color: Colors.grey.shade100,
+                                                  strokeWidth: 0.8,
+                                                  dashArray: [4, 4],
+                                                );
+                                              },
+                                            ),                                            lineTouchData: LineTouchData(
                                               touchTooltipData: LineTouchTooltipData(
-                                                tooltipBgColor: Colors.white.withOpacity(0.8),
+                                                tooltipBgColor: Colors.white,
+                                                tooltipRoundedRadius: 10,
+                                                tooltipBorder: BorderSide(color: Colors.grey.shade200, width: 1),
+                                                tooltipPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                                fitInsideHorizontally: true,
                                                 getTooltipItems: (touchedSpots) {
                                                   return touchedSpots.map((touchedSpot) {
                                                     final idx = touchedSpot.x.toInt();
@@ -988,8 +1140,7 @@ class _HomePageState extends State<HomePage> {
                                             ),
                                           ],
                                         ),
-                                        margin: const EdgeInsets.only(top: 8.0),
-                                        child: Column(
+                                        margin: const EdgeInsets.only(top: 8.0),                                        child: Column(
                                           children: [
                                             Text(
                                               "Latest price: ₱${price is double ? price.toStringAsFixed(2) : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2)}",
@@ -997,14 +1148,6 @@ class _HomePageState extends State<HomePage> {
                                                 fontSize: 16,
                                                 color: kBlue,
                                                 fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                            SizedBox(height: 4),
-                                            Text(
-                                              "As of: $formattedDate",
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: kBlue,
                                               ),
                                             ),
                                           ],
@@ -1042,8 +1185,7 @@ class _HomePageState extends State<HomePage> {
                               ),
                             ),
                           ),
-                        ],
-                      ),
+                        ],                      ),
                       SizedBox(height: 16),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1078,27 +1220,18 @@ class _HomePageState extends State<HomePage> {
                                     ),
                                   ),
                                 );
-                              }).toList(),
-                              onChanged: (String? newValue) {
+                              }).toList(),                              onChanged: (String? newValue) {
                                 setState(() {
                                   selectedSort = newValue;
-
-                                  if (newValue == "Name") {
-                                    filteredCommodities.sort((a, b) => a['commodity'].toString().compareTo(b['commodity'].toString()));
-                                  } else if (newValue == "Price (Low to High)") {
-                                    filteredCommodities.sort((a, b) {
-                                      double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
-                                      double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
-                                      return priceA.compareTo(priceB);
-                                    });
-                                  } else if (newValue == "Price (High to Low)") {
-                                    filteredCommodities.sort((a, b) {
-                                      double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
-                                      double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
-                                      return priceB.compareTo(priceA);
-                                    });
-                                  } else {                                    filteredCommodities = List.from(commodities);
+                                  
+                                  if (newValue == "None") {
                                     selectedSort = null;
+                                    // Just reapply the filter without sorting
+                                    filteredCommodities = List.from(commodities);
+                                    _applyFiltersOnly();
+                                  } else {
+                                    // Apply the new sort to the filtered commodities
+                                    _applySorting();
                                   }
                                   
                                   // Cache the sorted filtered commodities
@@ -1190,10 +1323,21 @@ class _HomePageState extends State<HomePage> {
                             onPressed: showFavoritesDialog,
                           ),
                           IconButton(
-                            icon: Icon(Icons.add, color: kPink),
-                            onPressed: showAddDialog,
+                            icon: Icon(Icons.add, color: kPink),                            onPressed: showAddDialog,
                           ),
                         ],
+                      ),                      // Total items count (minimal display)
+                      Container(
+                        padding: const EdgeInsets.only(top: 2.0, right: 8.0),
+                        alignment: Alignment.centerRight,
+                        child: Text(
+                          "Total: ${displayedCommodities.length}",
+                          style: TextStyle(
+                            fontSize: 8,
+                            color: const Color.fromARGB(255, 131, 131, 131),
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -1391,6 +1535,13 @@ class _HomePageState extends State<HomePage> {
     // Hide category when user filtered by a specific category (not "None" or "Favorites")
     final bool showCategory = selectedFilter == null || selectedFilter == "Favorites";
 
+    // Get forecast period for display
+    final bool isForecast = commodity['is_forecast'] == true;
+    final String forecastPeriod = commodity['forecast_period'] ?? "";
+    final String forecastText = isForecast 
+        ? (forecastPeriod.isNotEmpty ? "(Forecast - $forecastPeriod)" : "(Forecast)")
+        : "";
+
     return AnimatedContainer(
       duration: Duration(milliseconds: 200),
       height: 100,
@@ -1479,10 +1630,10 @@ class _HomePageState extends State<HomePage> {
                   "₱$formattedPrice",
                   style: TextStyle(fontWeight: FontWeight.w500, fontSize: 20),
                 ),
-                // Display "as of: date" if it's not from the global date
-                if (commodity['is_global_date'] == false && 
-                    commodity['price_date'] != null && 
-                    commodity['price_date'].toString().isNotEmpty)
+                // Always show date for non-global date prices to ensure context for older prices
+                if (commodity['price_date'] != null && 
+                    commodity['price_date'].toString().isNotEmpty && 
+                    commodity['is_global_date'] == false)
                   Text(
                     "as of: ${commodity['price_date']}",
                     style: TextStyle(
@@ -1491,10 +1642,10 @@ class _HomePageState extends State<HomePage> {
                       color: kBlue,
                     ),
                   ),
-                // Show forecast indicator
-                if (commodity['is_forecast'] == true)
+                // Show forecast indicator with specific forecast period
+                if (isForecast)
                   Text(
-                    "(Forecast)",
+                    forecastText,
                     style: TextStyle(
                       fontWeight: FontWeight.w300,
                       fontSize: 12,
@@ -1544,10 +1695,38 @@ class _HomePageState extends State<HomePage> {
       }).toList();
     }
     
+    // Apply the current sort setting to the filtered results
+    if (selectedSort != null) {
+      _applySortToList(result);
+    }
+    
     // Cache the filtered result after applying filter
     Future.microtask(() => DataCache.saveFilteredCommodities(result));
     
     return result;
+  }
+  
+  // Helper function to apply the current sort to any list
+  void _applySortToList(List<Map<String, dynamic>> listToSort) {
+    if (selectedSort == "Name") {
+      listToSort.sort((a, b) {
+        final nameA = COMMODITY_ID_TO_DISPLAY[a['id'].toString()]?['display_name'] ?? "";
+        final nameB = COMMODITY_ID_TO_DISPLAY[b['id'].toString()]?['display_name'] ?? "";
+        return nameA.compareTo(nameB);
+      });
+    } else if (selectedSort == "Price (Low to High)") {
+      listToSort.sort((a, b) {
+        double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
+        double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
+        return priceA.compareTo(priceB);
+      });
+    } else if (selectedSort == "Price (High to Low)") {
+      listToSort.sort((a, b) {
+        double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
+        double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
+        return priceB.compareTo(priceA);
+      });
+    }
   }
 
   // Fix the FutureBuilder closing in _buildDialogContent

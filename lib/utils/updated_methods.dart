@@ -67,14 +67,14 @@ Widget buildGlobalDateDisplay(String globalPriceDate) {
   return Container(
     width: double.infinity,
     color: Colors.white,
-    padding: EdgeInsets.symmetric(vertical: 8),
+    padding: EdgeInsets.symmetric(vertical: 10),
     alignment: Alignment.center,
     child: Text(
       "As of: ${globalPriceDate.isNotEmpty ? globalPriceDate : 'Latest Available Data'}",
       style: TextStyle(
         color: kBlue,
-        fontSize: 12,
-        fontWeight: FontWeight.w400,
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
       ),
     ),
   );

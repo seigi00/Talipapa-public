@@ -317,22 +317,13 @@ class FirestoreService {
       var pricesQuery;
       
       if (forecastPeriod == "Now") {
-        if (globalLatestDate != null) {
-          // First, get all prices from the global latest date
-          print("🔄 Fetching all prices for global date: $globalFormattedDate");
-          pricesQuery = await _db
-              .collection('price_entries')
-              .where('end_date', isEqualTo: globalLatestDate)
-              .where('is_forecast', isEqualTo: false)
-              .get();
-        } else {
-          // Fallback to getting all non-forecast prices sorted by date
-          pricesQuery = await _db
-              .collection('price_entries')
-              .where('is_forecast', isEqualTo: false)
-              .orderBy('end_date', descending: true)
-              .get();
-        }
+        // For "Now" view, get ALL non-forecast prices sorted by date (descending)
+        // This ensures we get the most recent price for each commodity
+        pricesQuery = await _db
+            .collection('price_entries')
+            .where('is_forecast', isEqualTo: false)
+            .orderBy('end_date', descending: true)
+            .get();
       } else {
         // For forecast views, get all prices (both actual and forecast)
         pricesQuery = await _db
@@ -345,7 +336,33 @@ class FirestoreService {
       
       // Group prices by commodity_id and keep the appropriate ones based on forecast setting
       Map<String, Map<String, dynamic>> latestPricesByCommmodity = {};
+      
+      // First pass: Add the global date prices (highest priority)
+      if (globalLatestDate != null) {
         for (var doc in pricesQuery.docs) {
+          final data = doc.data();
+          final commodityId = data['commodity_id'] as String?;
+          final isForecast = data['is_forecast'] ?? false;
+          final currentEndDate = data['end_date'] as Timestamp?;
+          
+          if (commodityId == null || isForecast || currentEndDate == null) continue;
+          
+          // Check if this price is from the global date
+          if (currentEndDate.seconds == globalLatestDate.seconds) {
+            _addPriceEntry(
+              data: data, 
+              commodityId: commodityId, 
+              latestPricesByCommmodity: latestPricesByCommmodity,
+              globalLatestDate: globalLatestDate,
+              globalFormattedDate: globalFormattedDate,
+              isForecast: isForecast,
+              forecastPeriod: forecastPeriod
+            );
+          }
+        }
+      }
+        // Second pass: Process all remaining prices
+      for (var doc in pricesQuery.docs) {
         final data = doc.data();
         final commodityId = data['commodity_id'] as String?;
         final isForecast = data['is_forecast'] ?? false;
@@ -355,81 +372,65 @@ class FirestoreService {
         // Process based on forecast setting
         bool shouldProcess = false;
         final currentEndDate = data['end_date'] as Timestamp?;
-        final isGlobalDate = globalLatestDate != null && 
-                            currentEndDate != null && 
-                            currentEndDate.seconds == globalLatestDate.seconds;
         
         if (forecastPeriod == "Now") {
           if (!isForecast) {
-            // For "Now" view, prefer prices from the global date
-            if (isGlobalDate) {
-              // This is from the global date - always use it
+            // Skip if we already have a global date price for this commodity
+            if (latestPricesByCommmodity.containsKey(commodityId) && 
+                latestPricesByCommmodity[commodityId]!['is_global_date']) {
+              continue;
+            }
+            
+            // Otherwise, if we don't have any price for this commodity yet
+            if (!latestPricesByCommmodity.containsKey(commodityId)) {
               shouldProcess = true;
-            } else if (!latestPricesByCommmodity.containsKey(commodityId)) {
-              // We don't have a price for this commodity yet, so use it
-              shouldProcess = true;
-            } else if (latestPricesByCommmodity.containsKey(commodityId) && 
-                      !latestPricesByCommmodity[commodityId]!['is_global_date']) {
-              // We already have a non-global date price, but need to check if this is newer
+            } 
+            // Or if we have a price, but this one is newer
+            else if (latestPricesByCommmodity.containsKey(commodityId)) {
               final existingDate = latestPricesByCommmodity[commodityId]!['end_date'] as Timestamp;
               if (currentEndDate != null && currentEndDate.compareTo(existingDate) > 0) {
                 // This price is newer, so use it
                 shouldProcess = true;
               }
             }
-          }
-        } else if (forecastPeriod == "Next Week" || forecastPeriod == "Two Weeks") {
-          // For forecast views, prefer forecast prices over actual prices
+          }        } else if (forecastPeriod == "Next Week" || forecastPeriod == "Two Weeks") {
+          // For forecast views, distinguish between one-week and two-week forecasts
           if (isForecast) {
-            // Always process forecast prices for forecast views
-            shouldProcess = true;
+            // Only process forecast prices if they match the selected forecast period
+            final currentEndDate = data['end_date'] as Timestamp?;
+            
+            if (currentEndDate != null) {
+              final today = DateTime.now();
+              final forecastDate = currentEndDate.toDate();
+              final daysDifference = forecastDate.difference(today).inDays;
+              
+              // Determine forecast period based on days difference
+              // First week (1-7 days) = Next Week, Second week (8-14 days) = Two Weeks
+              String actualForecastPeriod = (daysDifference <= 7) ? "Next Week" : "Two Weeks";
+              
+              // Only process if the forecast period matches what we want to show
+              if (forecastPeriod == actualForecastPeriod) {
+                shouldProcess = true;
+              }
+            }
           } else if (!latestPricesByCommmodity.containsKey(commodityId)) {
             // If we don't have any price for this commodity yet, use this actual price
             shouldProcess = true;
           }
-        }        if (shouldProcess) {
-          // Format dates for display
-          String formattedStartDate = data['start_date'] != null ? 
-              _formatTimestamp(data['start_date']) : "";
-          
-          String formattedEndDate = data['end_date'] != null ? 
-              _formatTimestamp(data['end_date']) : "";
-          
-          // Ensure price is a valid number
-          double price = 0.0;
-          if (data['price'] != null) {
-            if (data['price'] is double) {
-              price = data['price'];
-            } else if (data['price'] is num) {
-              price = (data['price'] as num).toDouble();
-            } else {
-              price = double.tryParse(data['price'].toString()) ?? 0.0;
-            }
-          }
-          
-          // Add flag to indicate if this price is from the global date
-          final isGlobalDate = globalLatestDate != null && 
-                           data['end_date'] != null &&
-                           (data['end_date'] as Timestamp).seconds == globalLatestDate.seconds;
-          
-          // Save this price as the latest for this commodity
-          latestPricesByCommmodity[commodityId] = {
-            'date': formattedStartDate,
-            'start_date': data['start_date'],
-            'end_date': data['end_date'],
-            'price': price,
-            'is_forecast': isForecast,
-            'is_global_date': isGlobalDate,
-            'global_date': globalFormattedDate,
-            'source': data['source'] ?? '',
-            'formatted_start_date': formattedStartDate,
-            'formatted_end_date': formattedEndDate,
-            'original_data': data
-          };
-          
-          // Debug
-          print("💰 Found ${isForecast ? 'forecast' : 'actual'} price for $commodityId: $price (date: $formattedEndDate) ${isGlobalDate ? '[GLOBAL DATE]' : ''} [${forecastPeriod}]");
-        }}
+        }
+        
+        if (shouldProcess) {
+          _addPriceEntry(
+            data: data, 
+            commodityId: commodityId, 
+            latestPricesByCommmodity: latestPricesByCommmodity,
+            globalLatestDate: globalLatestDate,
+            globalFormattedDate: globalFormattedDate,
+            isForecast: isForecast,
+            forecastPeriod: forecastPeriod
+          );
+        }
+      }
       
       print("✅ Processed latest prices for ${latestPricesByCommmodity.length} commodities");
       
@@ -446,6 +447,71 @@ class FirestoreService {
       return {};
     }
   }
+  
+  // Helper method to add a price entry to the latestPricesByCommmodity map
+  void _addPriceEntry({
+    required Map<String, dynamic> data,
+    required String commodityId,
+    required Map<String, Map<String, dynamic>> latestPricesByCommmodity,
+    required Timestamp? globalLatestDate,
+    required String globalFormattedDate,
+    required bool isForecast,
+    required String forecastPeriod
+  }) {
+    // Format dates for display
+    String formattedStartDate = data['start_date'] != null ? 
+        _formatTimestamp(data['start_date']) : "";
+    
+    String formattedEndDate = data['end_date'] != null ? 
+        _formatTimestamp(data['end_date']) : "";
+    
+    // Ensure price is a valid number
+    double price = 0.0;
+    if (data['price'] != null) {
+      if (data['price'] is double) {
+        price = data['price'];
+      } else if (data['price'] is num) {
+        price = (data['price'] as num).toDouble();
+      } else {
+        price = double.tryParse(data['price'].toString()) ?? 0.0;
+      }
+    }
+      // Add flag to indicate if this price is from the global date
+    final isGlobalDate = globalLatestDate != null && 
+                   data['end_date'] != null &&
+                   (data['end_date'] as Timestamp).seconds == globalLatestDate.seconds;
+    
+    // For forecast prices, determine whether it's Next Week or Two Weeks
+    String actualForecastPeriod = "";
+    if (isForecast && data['end_date'] != null) {
+      final forecastDate = (data['end_date'] as Timestamp).toDate();
+      final today = DateTime.now();
+      final daysDifference = forecastDate.difference(today).inDays;
+      
+      // Categorize based on days from now
+      actualForecastPeriod = (daysDifference <= 7) ? "Next Week" : "Two Weeks";
+    }
+    
+    // Save this price as the latest for this commodity
+    latestPricesByCommmodity[commodityId] = {
+      'date': formattedStartDate,
+      'start_date': data['start_date'],
+      'end_date': data['end_date'],
+      'price': price,
+      'is_forecast': isForecast,
+      'forecast_period': actualForecastPeriod, // Add the actual forecast period
+      'is_global_date': isGlobalDate,
+      'global_date': globalFormattedDate,
+      'source': data['source'] ?? '',
+      'formatted_start_date': formattedStartDate,
+      'formatted_end_date': formattedEndDate,
+      'original_data': data
+    };
+      // Debug
+    String forecastInfo = isForecast ? 'forecast ($actualForecastPeriod)' : 'actual';
+    print("💰 ${isGlobalDate ? '[GLOBAL DATE]' : 'Found'} $forecastInfo price for $commodityId: $price (date: $formattedEndDate) [${forecastPeriod}]");
+  }
+  
   // Get the latest global price date (for non-forecasted prices)
   Future<Map<String, dynamic>> fetchLatestGlobalPriceDate() async {
     try {
@@ -479,9 +545,14 @@ class FirestoreService {
           'formattedDate': ""
         };
       }
+        final date = endDate.toDate();
       
-      final date = endDate.toDate();
-      final formattedDate = "${date.month}/${date.day}/${date.year}";
+      // Format date as "May 3 2025" style
+      final List<String> months = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+      ];
+      final String formattedDate = "${months[date.month - 1]} ${date.day} ${date.year}";
       print("📅 Latest global price date: $formattedDate");
       
       return {

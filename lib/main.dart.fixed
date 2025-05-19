@@ -191,64 +191,51 @@ class _HomePageState extends State<HomePage> {
       } catch (e) {
         print("⚠️ Error finding latest global date: $e");
       }
+        // Get all the latest prices in a single batch for all commodities
+      print("🔄 Fetching all latest prices in one batch...");
+      final allLatestPrices = await firestoreService.fetchAllLatestPrices(forecastPeriod: selectedForecast);
+      print("✅ Fetched latest prices for ${allLatestPrices.length} commodities (Forecast: $selectedForecast)");
       
+      // Fetch all commodity documents from Firestore
       final querySnapshot = await _firestore.collection('commodities').get();
       final List<Map<String, dynamic>> allCommodities = [];
+      
+      if (querySnapshot.docs.isEmpty) {
+        print("⚠️ Warning: No commodities found in Firestore");
+        setState(() {
+          isLoading = false;
+        });
+        return;
+      }
       
       // Process each commodity document
       for (var doc in querySnapshot.docs) {
         final commodityId = doc.id; // This is the UUID
-        // Get the most recent price for this commodity
-        try {
-          final pricesSnapshot = await _firestore
-              .collection('price_entries')
-              .where('commodity_id', isEqualTo: commodityId)
-              .where('is_forecast', isEqualTo: false)
-              .orderBy('end_date', descending: true)
-              .limit(1)
-              .get();
+        
+        if (allLatestPrices.containsKey(commodityId)) {
+          // Use the price data from the batch query
+          final priceData = allLatestPrices[commodityId];
           
-          if (pricesSnapshot.docs.isNotEmpty) {
-            final priceData = pricesSnapshot.docs.first.data();
-            final price = priceData['price'] ?? 0.0;
-            
-            // Format date for display
-            final endDate = priceData['end_date'] as Timestamp?;
-            final formattedDate = endDate != null ? 
-                "${endDate.toDate().month}/${endDate.toDate().day}/${endDate.toDate().year}" : 
-                "No date";
-            
-            // Create the commodity entry with price and date info
-            final commodityEntry = {
-              'id': commodityId,
-              'weekly_average_price': price,
-              'price_date': formattedDate,
-              'is_forecast': false, // Mark as non-forecast
-            };
-            
-            allCommodities.add(commodityEntry);
-          } else {
-            // If no price data, still include the commodity with default values
-            allCommodities.add({
-              'id': commodityId,
-              'weekly_average_price': 0.0,
-              'price_date': 'No data',
-              'is_forecast': false,
-            });
-          }
-        } catch (error) {
-          print("❌ Error fetching price data for $commodityId: $error");
-          // Add commodity with default values on error
+          final commodityEntry = {
+            'id': commodityId,
+            'weekly_average_price': priceData['price'] ?? 0.0,
+            'price_date': priceData['formatted_end_date'] ?? 'No data',
+            'is_forecast': priceData['is_forecast'] ?? false,
+            'forecast_period': priceData['forecast_period'] ?? '',
+          };
+          
+          allCommodities.add(commodityEntry);
+        } else {
+          // If no price data, still include the commodity with default values
           allCommodities.add({
             'id': commodityId,
             'weekly_average_price': 0.0,
-            'price_date': 'Error loading data',
+            'price_date': 'No data',
             'is_forecast': false,
+            'forecast_period': '',
           });
         }
-      }
-
-      setState(() {
+      }      setState(() {
         commodities = allCommodities.where((commodity) {
           final itemId = commodity['id'].toString();
           return displayedCommoditiesIds.contains(itemId);
@@ -261,6 +248,23 @@ class _HomePageState extends State<HomePage> {
         }
 
         filteredCommodities = _applyFilter(commodities, allCommodities);
+        
+        // Apply sorting after filtering
+        if (selectedSort != null) {
+          _applySortToList(commodities);
+          _applySortToList(filteredCommodities);
+        }
+        
+        // Save cache after getting fresh data
+        DataCache.saveCommodities(commodities);
+        DataCache.saveFilteredCommodities(filteredCommodities);
+        DataCache.saveGlobalPriceDate(globalPriceDate);
+        DataCache.saveSelectedForecast(selectedForecast);
+        
+        // Mark data as initialized
+        _dataInitialized = true;
+        _lastUsedForecast = selectedForecast;
+        
         isLoading = false; // Set loading to false after updating state
       });
     } catch (e) {
@@ -503,6 +507,11 @@ class _HomePageState extends State<HomePage> {
             final displayName = displayInfo?['display_name'] ?? "Unknown Commodity";
             return displayName.toLowerCase().contains(searchText.toLowerCase());
           }).toList();
+    
+    // Always apply sorting to displayed commodities to maintain consistent ordering
+    if (selectedSort != null && displayedCommodities.isNotEmpty) {
+      _applySortToList(displayedCommodities);
+    }
 
     return Stack(
       children: [
@@ -877,8 +886,7 @@ class _HomePageState extends State<HomePage> {
             commodities[i]['is_forecast'] = priceData['is_forecast'] ?? false;
           }
         }
-        
-        // Also update filtered commodities
+          // Also update filtered commodities
         for (var i = 0; i < filteredCommodities.length; i++) {
           final commodityId = filteredCommodities[i]['id'].toString();
           if (latestPricesData.containsKey(commodityId)) {
@@ -888,8 +896,18 @@ class _HomePageState extends State<HomePage> {
             filteredCommodities[i]['weekly_average_price'] = priceData['price'] ?? 0.0;
             filteredCommodities[i]['price_date'] = priceData['formatted_end_date'] ?? 'No data';
             filteredCommodities[i]['is_forecast'] = priceData['is_forecast'] ?? false;
+            filteredCommodities[i]['forecast_period'] = priceData['forecast_period'] ?? '';
           }
         }
+        
+        // Apply current sort after updating data
+        if (selectedSort != null) {
+          _applySortToList(commodities);
+          _applySortToList(filteredCommodities);
+        }
+        
+        // Cache the selected forecast for persistence
+        DataCache.saveSelectedForecast(text);
         
         // Hide loading indicator
         isLoading = false;
@@ -1034,18 +1052,30 @@ class _HomePageState extends State<HomePage> {
                         fontSize: 12,
                         color: kBlue,
                       ),
-                    ),
+                    ),                  // Display (Forecast) tag if the price is a forecast
+                  if (commodity['is_forecast'] == true) {
+                    // Get forecast period for display
+                    final String forecastPeriod = commodity['forecast_period'] ?? "";
+                    final String forecastText = forecastPeriod.isNotEmpty 
+                      ? "(Forecast - $forecastPeriod)" 
+                      : "(Forecast)";
                     
-                  // Display (Forecast) tag if the price is a forecast
-                  if (commodity['is_forecast'] == true)
-                    const Text(
-                      "(Forecast)",
+                    // Choose color based on forecast period
+                    final Color forecastColor = forecastPeriod == "Next Week" 
+                      ? Colors.orange 
+                      : forecastPeriod == "Two Weeks" 
+                        ? Colors.deepOrange 
+                        : Colors.orange;
+                    
+                    Text(
+                      forecastText,
                       style: TextStyle(
-                        fontWeight: FontWeight.w300,
+                        fontWeight: FontWeight.w500,
                         fontSize: 12,
-                        color: Colors.orange,
+                        color: forecastColor,
                       ),
-                    ),
+                    );
+                  }
                     
                   // Favorite icon
                   IconButton(
@@ -1100,16 +1130,49 @@ class _HomePageState extends State<HomePage> {
     );
   }
   
-  List<Map<String, dynamic>> _applyFilter(List<Map<String, dynamic>> list, List<Map<String, dynamic>> all) {
+  void _applySorting() {
+    if (selectedSort != null) {
+      _applySortToList(filteredCommodities);
+      
+      // Cache the sort preference
+      DataCache.saveSelectedSort(selectedSort);
+    }
+  }
+
+  // Helper method to apply sorting to any list
+  void _applySortToList(List<Map<String, dynamic>> listToSort) {
+    if (selectedSort == "Name") {
+      listToSort.sort((a, b) {
+        final nameA = COMMODITY_ID_TO_DISPLAY[a['id'].toString()]?['display_name'] ?? "";
+        final nameB = COMMODITY_ID_TO_DISPLAY[b['id'].toString()]?['display_name'] ?? "";
+        return nameA.compareTo(nameB);
+      });
+    } else if (selectedSort == "Price (Low to High)") {
+      listToSort.sort((a, b) {
+        double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
+        double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
+        return priceA.compareTo(priceB);
+      });
+    } else if (selectedSort == "Price (High to Low)") {
+      listToSort.sort((a, b) {
+        double priceA = double.tryParse(a['weekly_average_price'].toString()) ?? 0.0;
+        double priceB = double.tryParse(b['weekly_average_price'].toString()) ?? 0.0;
+        return priceB.compareTo(priceA);
+      });
+    }
+  }
+    List<Map<String, dynamic>> _applyFilter(List<Map<String, dynamic>> list, List<Map<String, dynamic>> all) {
+    List<Map<String, dynamic>> result;
+    
     if (selectedFilter == null || selectedFilter == "None") {
-      return List.from(list);
+      result = List.from(list);
     } else if (selectedFilter == "Favorites") {
-      return list.where((commodity) {
+      result = list.where((commodity) {
         final commodityId = commodity['id'].toString();
         return favoriteCommodities.contains(commodityId);
       }).toList();
     } else {
-      return list.where((commodity) {
+      result = list.where((commodity) {
         final commodityId = commodity['id'].toString();
         final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
         if (typeInfo == null) return false;
@@ -1118,5 +1181,12 @@ class _HomePageState extends State<HomePage> {
         return category.toLowerCase() == selectedFilter?.toLowerCase();
       }).toList();
     }
+    
+    // Apply the current sort setting to the filtered results
+    if (selectedSort != null && result.isNotEmpty) {
+      _applySortToList(result);
+    }
+    
+    return result;
   }
 }
