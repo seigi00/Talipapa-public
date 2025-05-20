@@ -15,6 +15,7 @@ import 'image_mapping.dart';
 import 'services/firestore_service.dart';
 import 'utils/debug_helper.dart';
 import 'utils/data_cache.dart';
+import 'utils/forecast_cache_manager.dart';
 import 'package:fl_chart/fl_chart.dart';
 
 void main() async {
@@ -129,7 +130,64 @@ class _HomePageState extends State<HomePage> {
   }  // Load data from cache
   Future<bool> _loadFromCache() async {
     try {
-      // Check if cache is valid
+      // Get the selected forecast period
+      final cachedForecast = await DataCache.getSelectedForecast();
+      final forecastPeriod = cachedForecast.isNotEmpty ? cachedForecast : "Now";
+      
+      // If we are in "Next Week" or "Two Weeks" view, try to load from forecast-specific cache first
+      if (forecastPeriod == "Next Week" || forecastPeriod == "Two Weeks") {
+        final forecastCache = await ForecastCacheManager.getCachedForecastData(forecastPeriod);
+        if (forecastCache != null && forecastCache['commodities'] != null) {
+          final List<dynamic> tempCommodities = forecastCache['commodities'];
+          final List<Map<String, dynamic>> typedCommodities = tempCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
+          
+          // Log forecast data to verify it's loaded correctly
+          print("🔍 Loaded forecast commodities for $forecastPeriod: ${typedCommodities.length}");
+          
+          // Extract forecast data for UI display
+          final forecastEntries = typedCommodities.where((commodity) => commodity['is_forecast'] == true).toList();
+          if (forecastEntries.isNotEmpty) {
+            print("🔍 Number of forecast entries: ${forecastEntries.length}");
+            
+            // Find the latest non-forecast entry for comparison
+            final latestNonForecast = typedCommodities.where((commodity) => commodity['is_forecast'] != true).toList();
+            if (latestNonForecast.isNotEmpty) {
+              print("🔍 Latest non-forecast entry found");
+            }
+            
+            // Get the first forecast entry (Next Week)
+            final firstForecast = forecastEntries.isNotEmpty ? forecastEntries[0] : null;
+            if (firstForecast != null) {
+              print("🔍 First forecast: Price = ${firstForecast['weekly_average_price']}, Date = ${firstForecast['price_date']}");
+            }
+            
+            // Get the second forecast entry (Two Weeks) if available
+            final secondForecast = forecastEntries.length > 1 ? forecastEntries[1] : null;
+            if (secondForecast != null) {
+              print("🔍 Second forecast: Price = ${secondForecast['weekly_average_price']}, Date = ${secondForecast['price_date']}");
+            }
+          }
+          
+          // Get filtered commodities from the cache
+          final List<dynamic> tempFilteredCommodities = forecastCache['filteredCommodities'] ?? tempCommodities;
+          final List<Map<String, dynamic>> typedFilteredCommodities = tempFilteredCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
+            // Update the UI
+          final cachedSort = await DataCache.getSelectedSort();
+          setState(() {
+            commodities = typedCommodities;
+            filteredCommodities = typedFilteredCommodities;
+            globalPriceDate = forecastCache['globalPriceDate'] ?? "";
+            selectedForecast = forecastPeriod;
+            selectedSort = forecastCache['selectedSort'] ?? cachedSort;
+          });
+          print("✅ Successfully loaded forecast data from cache for $forecastPeriod");
+          return true;
+        } else {
+          print("⚠️ No valid forecast cache found for $forecastPeriod, falling back to regular cache");
+        }
+      }
+      
+      // Fall back to regular cache for "Now" view or if forecast cache not found
       final isCacheValid = await DataCache.isCacheValid();
       if (!isCacheValid) {
         print("🔄 Cache expired or not found, will fetch from network");
@@ -148,7 +206,6 @@ class _HomePageState extends State<HomePage> {
           tempFilteredCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
       
       final cachedGlobalPriceDate = await DataCache.getGlobalPriceDate();
-      final cachedForecast = await DataCache.getSelectedForecast();
       final cachedSort = await DataCache.getSelectedSort();
       
       // Validate cached data
@@ -166,20 +223,16 @@ class _HomePageState extends State<HomePage> {
           ? cachedGlobalPriceDate
           : "";
       
-      final effectiveForecast = cachedForecast.isNotEmpty
-          ? cachedForecast
-          : "Now";
-      
       // Update the UI with cached data
       setState(() {
         commodities = typedCommodities;
         filteredCommodities = effectiveFilteredCommodities.cast<Map<String, dynamic>>();
         globalPriceDate = effectiveGlobalPriceDate;
-        selectedForecast = effectiveForecast;
+        selectedForecast = forecastPeriod;
         selectedSort = cachedSort;
       });
       
-      print("✅ Loaded ${commodities.length} commodities and ${filteredCommodities.length} filtered commodities from cache");
+      print("✅ Loaded ${commodities.length} commodities and ${filteredCommodities.length} filtered commodities from regular cache");
       print("✅ Using cached forecast period: $selectedForecast");
       print("✅ Using cached sort option: $selectedSort");
       
@@ -230,8 +283,7 @@ class _HomePageState extends State<HomePage> {
     });
   }  // Store the last used forecast period to detect changes
   String _lastUsedForecast = "Now";
-  
-  @override
+    @override
   void didChangeDependencies() {
     super.didChangeDependencies();
 
@@ -239,10 +291,31 @@ class _HomePageState extends State<HomePage> {
     // 1. First load (_dataInitialized is false)
     // 2. When forecast period changes (_lastUsedForecast != selectedForecast)
     if (!_dataInitialized || _lastUsedForecast != selectedForecast) {
-      print("🔄 Fetching data: ${!_dataInitialized ? 'First load' : 'Forecast changed from $_lastUsedForecast to $selectedForecast'}");
+      print("🔄 Forecast changed from $_lastUsedForecast to $selectedForecast");
       
-      // Fetch commodities and repopulate filteredCommodities
-      fetchCommodities();
+      // Try to load from cache first if forecast period changed
+      if (_lastUsedForecast != selectedForecast) {
+        ForecastCacheManager.hasForecastCache(selectedForecast).then((hasCachedForecast) {
+          if (hasCachedForecast) {
+            print("🔍 Found forecast data in cache for $selectedForecast, loading from cache");
+            _loadFromCache().then((loadedFromCache) {
+              if (!loadedFromCache) {
+                // If cache loading failed, fetch from Firestore
+                print("❌ Failed to load from forecast cache, fetching from Firestore");
+                fetchCommodities();
+              }
+            });
+          } else {
+            // No cache for this forecast period, fetch from Firestore
+            print("🔄 No forecast cache for $selectedForecast, fetching from Firestore");
+            fetchCommodities();
+          }
+        });
+      } else {
+        // First load without a forecast change
+        fetchCommodities();
+      }
+      
       _dataInitialized = true;
       _lastUsedForecast = selectedForecast;
     } else {
@@ -403,12 +476,33 @@ class _HomePageState extends State<HomePage> {
         }
       });
       
-      // Cache data after successful fetch
+    // Cache data after successful fetch
       await DataCache.saveCommodities(commodities);
       await DataCache.saveFilteredCommodities(filteredCommodities);
       await DataCache.saveSelectedForecast(selectedForecast);
       await DataCache.saveGlobalPriceDate(globalPriceDate);
       print("✅ Saved commodity data to cache");
+      
+      // Save forecast data to specific forecast cache
+      if (selectedForecast == "Next Week" || selectedForecast == "Two Weeks") {
+        final forecastData = {
+          'commodities': commodities,
+          'filteredCommodities': filteredCommodities,
+          'globalPriceDate': globalPriceDate,
+          'selectedSort': selectedSort,
+        };
+        
+        await ForecastCacheManager.saveForecastData(selectedForecast, forecastData);
+        print("✅ Saved forecast data to forecast-specific cache for $selectedForecast");
+        
+        // Verify the cache was saved
+        final savedCache = await ForecastCacheManager.getCachedForecastData(selectedForecast);
+        if (savedCache != null) {
+          print("✅ Verified forecast cache exists for $selectedForecast containing ${savedCache['commodities']?.length ?? 0} commodities");
+        } else {
+          print("⚠️ Failed to verify forecast cache for $selectedForecast");
+        }
+      }
     } catch (e) {
       print("❌ Error fetching commodities: $e");
     }
@@ -959,9 +1053,9 @@ class _HomePageState extends State<HomePage> {
                                         ),
                                       ),
                                       Expanded(
-                                        child: LineChart(
-                                          LineChartData(
-                                            lineBarsData: [                                              LineChartBarData(
+                                        child: LineChart(                                          LineChartData(
+                                            lineBarsData: [
+                                              LineChartBarData(
                                                 spots: spots,
                                                 isCurved: true,
                                                 curveSmoothness: 0.35, // Smoother curve
@@ -1005,8 +1099,8 @@ class _HomePageState extends State<HomePage> {
                                                   }
                                                 ),
                                               ),
-                                            ],
-                                            titlesData: FlTitlesData(                                              leftTitles: AxisTitles(
+                                            ],                                            titlesData: FlTitlesData(
+                                              leftTitles: AxisTitles(
                                                 sideTitles: SideTitles(
                                                   showTitles: true,
                                                   reservedSize: 40,
@@ -1025,7 +1119,8 @@ class _HomePageState extends State<HomePage> {
                                                     );
                                                   },
                                                 ),
-                                              ),bottomTitles: AxisTitles(
+                                              ),
+                                              bottomTitles: AxisTitles(
                                                 sideTitles: SideTitles(
                                                   showTitles: true,
                                                   reservedSize: 25, // Add more space for the titles
@@ -1067,9 +1162,14 @@ class _HomePageState extends State<HomePage> {
                                                   interval: 1,
                                                 ),
                                               ),
-                                              topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                              rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                                            ),                                            borderData: FlBorderData(
+                                              topTitles: AxisTitles(
+                                                sideTitles: SideTitles(showTitles: false)
+                                              ),
+                                              rightTitles: AxisTitles(
+                                                sideTitles: SideTitles(showTitles: false)
+                                              ),
+                                            ),
+                                            borderData: FlBorderData(
                                               show: true,
                                               border: Border.all(color: Colors.grey.shade300, width: 1),
                                             ),
@@ -1450,8 +1550,7 @@ class _HomePageState extends State<HomePage> {
         bottomNavigationBar: CustomBottomNavBar(), // Use the reusable bottom navigation bar
       ),
     );
-  }
-  Widget _forecastButton(String text, {double height = 25}) {
+  }  Widget _forecastButton(String text, {double height = 25}) {
     return ConstrainedBox(
       constraints: BoxConstraints(minWidth: 100, maxWidth: 130), // Increased min and max width
       child: SizedBox(
@@ -1464,7 +1563,8 @@ class _HomePageState extends State<HomePage> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
-          ),          onPressed: () async {
+          ),
+          onPressed: () async {
             if (selectedForecast != text) {
               setState(() {
                 selectedForecast = text;
@@ -1505,8 +1605,7 @@ class _HomePageState extends State<HomePage> {
                 color: selectedForecast == text ? kPink : Colors.grey,
                 fontSize: 11,
                 fontWeight: FontWeight.w500,
-              ),
-            ),
+              ),            ),
           ),
         ),
       ),
@@ -1659,18 +1758,12 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
-
   List<String> getAllCommodities() {
     List<String> allCommodities = [];
-    COMMODITY_TYPES.forEach((key, commodities) {
-      for (String commodity in (commodities as List<String>)) {
-        if (key.toLowerCase().contains('rice')) {
-          allCommodities.add('${commodity}_$key');
-        } else {
-          allCommodities.add(commodity);
-        }
-      }
-    });    return allCommodities;
+    COMMODITY_ID_TO_DISPLAY.forEach((id, details) {
+      allCommodities.add(id);
+    });
+    return allCommodities;
   }  // Helper to apply filters
   List<Map<String, dynamic>> _applyFilter(
       List<Map<String, dynamic>> displayedCommodities,
