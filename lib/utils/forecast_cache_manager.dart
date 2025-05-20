@@ -5,6 +5,7 @@ import '../constants.dart';  // Import for COMMODITY_ID_TO_DISPLAY
 class ForecastCacheManager {
   static const String _baseKey = 'all_latest_prices';
   static const String _cacheVersion = '1.0';
+  static const List<String> _forecastPeriods = ['Now', 'Next Week', 'Two Weeks'];
   
   /// Get cached forecast data if it exists and is valid
   static Future<Map<String, dynamic>?> getCachedForecastData(String forecastPeriod) async {
@@ -164,9 +165,8 @@ class ForecastCacheManager {
   /// Get all cached forecast data as formatted string for chatbot
   static Future<String> getAllForecastDataForChatbot() async {
     final StringBuffer buffer = StringBuffer();
-    final periods = ['Now', 'Next Week', 'Two Weeks'];
     
-    for (final period in periods) {
+    for (final period in _forecastPeriods) {
       final data = await getCachedForecastData(period);
       if (data != null) {
         buffer.writeln('\n=== $period ===');

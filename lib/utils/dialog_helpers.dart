@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../constants.dart';
+import '../utils/forecast_cache_manager.dart';
 
 // Method to build the dialog content for selecting commodities
 Widget buildDialogContent(
@@ -91,24 +92,52 @@ Widget buildForecastButton(
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
-        ),
-        onPressed: () async {
+        ),        onPressed: () async {
           // Update the selected forecast period
           onForecastChanged(text);
           
-          // Update all commodity prices based on the selected forecast period
-          try {
-            // Fetch the latest prices with the selected forecast period
-            final Map<String, dynamic> latestPricesData = await firestoreService.fetchAllLatestPrices(
-              forecastPeriod: text
-            );
+          // First check if we have cached data for this forecast period
+          final forecastCache = await ForecastCacheManager.getCachedForecastData(text);
+          if (forecastCache != null) {
+            print("✅ Using cached forecast data for $text");
             
-            // Pass the price data to the parent widget to update the UI
-            onPricesUpdated(latestPricesData);
+            // We have valid cached data, pass it to the parent
+            final Map<String, dynamic> latestPricesMap = {};
             
-            print("✅ Updated prices with forecast period: $text");
-          } catch (e) {
-            print("❌ Error updating prices with forecast: $e");
+            // Transform the cached data format to match what's expected
+            final commodities = forecastCache['commodities'] as List<dynamic>;
+            for (final commodity in commodities) {
+              final commodityId = commodity['id'].toString();
+              if (commodity['weekly_average_price'] != null) {
+                latestPricesMap[commodityId] = {
+                  'price': commodity['weekly_average_price'],
+                  'is_forecast': commodity['is_forecast'] ?? false,
+                  'formatted_end_date': commodity['price_date'] ?? '',
+                  'forecast_period': commodity['forecast_period'] ?? '',
+                  'is_global_date': commodity['is_global_date'] ?? false,
+                };
+              }
+            }
+            
+            // Use the cached data
+            onPricesUpdated(latestPricesMap);
+            print("✅ Updated prices from cache with forecast period: $text");
+          } else {
+            // No valid cache, fetch from Firestore
+            try {
+              print("🔄 No valid cache for $text, fetching from Firestore...");
+              // Fetch the latest prices with the selected forecast period
+              final Map<String, dynamic> latestPricesData = await firestoreService.fetchAllLatestPrices(
+                forecastPeriod: text
+              );
+              
+              // Pass the price data to the parent widget to update the UI
+              onPricesUpdated(latestPricesData);
+              
+              print("✅ Updated prices with forecast period: $text");
+            } catch (e) {
+              print("❌ Error updating prices with forecast: $e");
+            }
           }
         },
         child: FittedBox(

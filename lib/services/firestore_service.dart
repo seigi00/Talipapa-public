@@ -2,6 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 class FirestoreService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
+  
+  // For tracking forecast entries by commodity
+  bool _forecastDatesOrganized = false;
+  Map<String, List<Timestamp>> _forecastDatesByCommodity = {};
 
   // Fetch all commodities
   Future<List<Map<String, dynamic>>> fetchCommodities() async {
@@ -315,21 +319,62 @@ class FirestoreService {
       
       // Create an efficient query based on our needs
       var pricesQuery;
-      
-      if (forecastPeriod == "Now") {
-        // For "Now" view, get ALL non-forecast prices sorted by date (descending)
-        // This ensures we get the most recent price for each commodity
+        if (forecastPeriod == "Now") {
+        // For "Now" view, get only the most recent non-forecast prices
+        // We'll use the global date as reference for consistency
+        final globalDateInfo = await fetchLatestGlobalPriceDate();
+        final globalLatestDate = globalDateInfo['date'] as Timestamp?;
+
+        if (globalLatestDate != null) {
+          pricesQuery = await _db
+              .collection('price_entries')
+              .where('is_forecast', isEqualTo: false)
+              .where('end_date', isEqualTo: globalLatestDate)
+              .get();
+        } else {
+          // Fallback to getting latest prices if no global date
+          pricesQuery = await _db
+              .collection('price_entries')
+              .where('is_forecast', isEqualTo: false)
+              .orderBy('end_date', descending: true)
+              .get();
+        }      } else {        // For forecast views, only get forecast prices
+        print("🔍 Querying forecast prices for period: $forecastPeriod");
         pricesQuery = await _db
             .collection('price_entries')
-            .where('is_forecast', isEqualTo: false)
-            .orderBy('end_date', descending: true)
+            .where('is_forecast', isEqualTo: true)
+            .orderBy('end_date') // Order by ascending to get chronological order
             .get();
-      } else {
-        // For forecast views, get all prices (both actual and forecast)
-        pricesQuery = await _db
-            .collection('price_entries')
-            .orderBy('end_date', descending: true)
-            .get();
+            
+        print("📊 Found ${pricesQuery.docs.length} forecast price entries");
+        
+        // Debug: Print all forecast entries grouped by commodity
+        Map<String, List<Map<String, dynamic>>> forecastsByCommodity = {};
+        for (var doc in pricesQuery.docs) {
+          final data = doc.data();
+          final commodityId = data['commodity_id'] as String?;
+          final endDate = data['end_date'] as Timestamp?;
+          
+          if (commodityId != null && endDate != null) {
+            if (!forecastsByCommodity.containsKey(commodityId)) {
+              forecastsByCommodity[commodityId] = [];
+            }
+            forecastsByCommodity[commodityId]!.add({
+              'date': _formatTimestamp(endDate),
+              'price': data['price'],
+            });
+          }
+        }
+        
+        // Print forecast data for each commodity
+        print("\n📅 Forecast Dates by Commodity:");
+        forecastsByCommodity.forEach((commodityId, forecasts) {
+          print("\n🔸 Commodity: $commodityId");
+          forecasts.sort((a, b) => a['date'].compareTo(b['date'])); // Sort by date
+          for (int i = 0; i < forecasts.length; i++) {
+            print("  ${i + 1}. Date: ${forecasts[i]['date']}, Price: ${forecasts[i]['price']}");
+          }
+        });
       }
           
       print("✅ Found ${pricesQuery.docs.length} total price entries");
@@ -346,9 +391,12 @@ class FirestoreService {
           final currentEndDate = data['end_date'] as Timestamp?;
           
           if (commodityId == null || isForecast || currentEndDate == null) continue;
+            // For "Now" view: only add non-forecast prices from global date
+          // For forecast views: only add forecast prices
+          bool isRelevantPrice = (forecastPeriod == "Now" && !isForecast && currentEndDate.seconds == globalLatestDate.seconds) ||
+                                 (forecastPeriod != "Now" && isForecast);
           
-          // Check if this price is from the global date
-          if (currentEndDate.seconds == globalLatestDate.seconds) {
+          if (isRelevantPrice) {
             _addPriceEntry(
               data: data, 
               commodityId: commodityId, 
@@ -393,20 +441,50 @@ class FirestoreService {
                 shouldProcess = true;
               }
             }
-          }        } else if (forecastPeriod == "Next Week" || forecastPeriod == "Two Weeks") {
-          // For forecast views, distinguish between one-week and two-week forecasts
+          }        } else if (forecastPeriod == "Next Week" || forecastPeriod == "Two Weeks") {          // For forecast views, handle each commodity's forecast entries chronologically
           if (isForecast) {
-            // Only process forecast prices if they match the selected forecast period
             final currentEndDate = data['end_date'] as Timestamp?;
             
             if (currentEndDate != null) {
-              final today = DateTime.now();
-              final forecastDate = currentEndDate.toDate();
-              final daysDifference = forecastDate.difference(today).inDays;
+              print("\n🔍 Processing forecast entry for commodity $commodityId");
+              print("📅 Current entry date: ${_formatTimestamp(currentEndDate)}");
               
-              // Determine forecast period based on days difference
-              // First week (1-7 days) = Next Week, Second week (8-14 days) = Two Weeks
-              String actualForecastPeriod = (daysDifference <= 7) ? "Next Week" : "Two Weeks";
+              // Get all forecast entries for this commodity
+              final allForecastEntries = pricesQuery.docs
+                  .where((d) => d.data()['commodity_id'] == commodityId && (d.data()['is_forecast'] ?? false))
+                  .toList();
+              
+              // Sort by date (ascending)
+              allForecastEntries.sort((a, b) {
+                final aDate = a.data()['end_date'] as Timestamp;
+                final bDate = b.data()['end_date'] as Timestamp;
+                return aDate.compareTo(bDate);
+              });
+              
+              print("📊 Found ${allForecastEntries.length} total forecast entries for this commodity");
+              print("Forecast dates in order:");
+              for (var entry in allForecastEntries) {
+                final date = entry.data()['end_date'] as Timestamp;
+                final price = entry.data()['price'];
+                print("  - ${_formatTimestamp(date)}: ₱$price");
+              }
+              
+              // Find position of this entry
+              int position = -1;
+              for (int i = 0; i < allForecastEntries.length; i++) {
+                final entryDate = allForecastEntries[i].data()['end_date'] as Timestamp;
+                if (entryDate.seconds == currentEndDate.seconds) {
+                  position = i + 1; // 1-based position
+                  break;
+                }
+              }
+              
+              print("📍 This entry's position in sequence: $position");
+              
+              // First position = Next Week, others = Two Weeks
+              String actualForecastPeriod = (position == 1) ? "Next Week" : "Two Weeks";
+              
+              print("📊 Forecast position for ${_formatTimestamp(currentEndDate)}: $position, period: $actualForecastPeriod");
               
               // Only process if the forecast period matches what we want to show
               if (forecastPeriod == actualForecastPeriod) {
@@ -480,16 +558,22 @@ class FirestoreService {
     final isGlobalDate = globalLatestDate != null && 
                    data['end_date'] != null &&
                    (data['end_date'] as Timestamp).seconds == globalLatestDate.seconds;
-    
-    // For forecast prices, determine whether it's Next Week or Two Weeks
+      // For forecast prices, determine whether it's Next Week or Two Weeks
     String actualForecastPeriod = "";
     if (isForecast && data['end_date'] != null) {
-      final forecastDate = (data['end_date'] as Timestamp).toDate();
-      final today = DateTime.now();
-      final daysDifference = forecastDate.difference(today).inDays;
-      
-      // Categorize based on days from now
-      actualForecastPeriod = (daysDifference <= 7) ? "Next Week" : "Two Weeks";
+      // For consistency, we use the same determination logic as in the selection code
+      if (forecastPeriod == "Next Week" || forecastPeriod == "Two Weeks") {
+        // Use the selected forecast period since we've already validated it
+        actualForecastPeriod = forecastPeriod;
+      } else {
+        // Fallback to legacy calculation
+        final forecastDate = (data['end_date'] as Timestamp).toDate();
+        final today = DateTime.now();
+        final daysDifference = forecastDate.difference(today).inDays;
+        
+        // Categorize based on days from now
+        actualForecastPeriod = (daysDifference <= 7) ? "Next Week" : "Two Weeks";
+      }
     }
     
     // Save this price as the latest for this commodity

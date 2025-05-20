@@ -1,0 +1,58 @@
+// This file contains helper methods to implement forecast date processing
+// They will be added to the FirestoreService class
+
+// Organize all forecast entries by commodity ID
+void _organizeForecastDates(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+  // Reset the tracking map
+  _forecastDatesByCommodity = {};
+  
+  // Process all forecast entries and organize by commodity
+  for (var doc in docs) {
+    final data = doc.data();
+    final commodityId = data['commodity_id'] as String?;
+    final isForecast = data['is_forecast'] ?? false;
+    final currentEndDate = data['end_date'] as Timestamp?;
+    
+    if (commodityId != null && isForecast && currentEndDate != null) {
+      if (!_forecastDatesByCommodity.containsKey(commodityId)) {
+        _forecastDatesByCommodity[commodityId] = [];
+      }
+      
+      _forecastDatesByCommodity[commodityId]!.add(currentEndDate);
+    }
+  }
+  
+  // Sort all dates in chronological order for each commodity
+  for (var entry in _forecastDatesByCommodity.entries) {
+    entry.value.sort((a, b) => a.compareTo(b)); // Earliest first
+  }
+  
+  // Print debug info
+  print("📊 Organized forecast dates for ${_forecastDatesByCommodity.length} commodities");
+  for (var entry in _forecastDatesByCommodity.entries) {
+    print("📊 Commodity ${entry.key}: ${entry.value.length} forecast dates");
+    for (int i = 0; i < entry.value.length; i++) {
+      print("📊   Position ${i+1}: ${_formatTimestamp(entry.value[i])}");
+    }
+  }
+  
+  _forecastDatesOrganized = true;
+}
+
+// Get the position of a forecast entry in the chronological sequence
+int _getForecastPosition(String commodityId, Timestamp endDate) {
+  if (!_forecastDatesByCommodity.containsKey(commodityId)) {
+    print("⚠️ No forecast dates found for commodity $commodityId");
+    return 0;
+  }
+  
+  final dates = _forecastDatesByCommodity[commodityId]!;
+  for (int i = 0; i < dates.length; i++) {
+    if (dates[i].seconds == endDate.seconds) {
+      return i + 1; // 1-based position (1 = first, 2 = second, etc.)
+    }
+  }
+  
+  print("⚠️ Forecast date ${_formatTimestamp(endDate)} not found in sequence for commodity $commodityId");
+  return 0;
+}

@@ -19,9 +19,8 @@ class ForecastCacheHelper {
         final jsonData = jsonDecode(cachedData);
         final timestamp = DateTime.parse(jsonData['timestamp']);
         final currentTime = DateTime.now();
-        
-        // For forecasts, use a longer cache duration
-        final cacheDurationMinutes = forecastPeriod == "Now" ? 60 : 7200; // 1 hour for current, 5 days for forecasts
+          // Use the same cache duration (5 days) for all periods since we're using global date for "Now"
+        final cacheDurationMinutes = 7200; // 5 days for all periods
         
         // Check if the cache is still valid (not expired)
         if (currentTime.difference(timestamp).inMinutes < cacheDurationMinutes) {

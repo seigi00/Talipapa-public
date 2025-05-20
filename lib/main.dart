@@ -75,6 +75,7 @@ class _HomePageState extends State<HomePage> {
   String? deviceUUID;
   String globalPriceDate = ""; // Store the latest global price date
   bool _dataInitialized = false; // Track if data has been initialized
+  bool _fetchInProgress = false; // Track if a fetch operation is in progress
   @override
   void initState() {
     super.initState();
@@ -118,14 +119,13 @@ class _HomePageState extends State<HomePage> {
   Future<void> loadCachedDataAndFetch() async {
     // First try to load from cache for immediate display
     bool loadedFromCache = await _loadFromCache();
-    
-    // If cache is invalid or empty, fetch from network
+      // If cache is invalid or empty, fetch from network
     if (!loadedFromCache) {
       await fetchCommodities();
     } else {
       print("✅ Loaded commodity data from cache");
-      // Perform a background fetch to update cache without blocking UI
-      Future.delayed(Duration.zero, () => fetchCommodities());
+      // No background fetch to prevent unnecessary Firestore calls
+      print("✅ Using cached data without background refresh");
     }
   }  // Load data from cache
   Future<bool> _loadFromCache() async {
@@ -134,109 +134,34 @@ class _HomePageState extends State<HomePage> {
       final cachedForecast = await DataCache.getSelectedForecast();
       final forecastPeriod = cachedForecast.isNotEmpty ? cachedForecast : "Now";
       
-      // If we are in "Next Week" or "Two Weeks" view, try to load from forecast-specific cache first
-      if (forecastPeriod == "Next Week" || forecastPeriod == "Two Weeks") {
-        final forecastCache = await ForecastCacheManager.getCachedForecastData(forecastPeriod);
-        if (forecastCache != null && forecastCache['commodities'] != null) {
-          final List<dynamic> tempCommodities = forecastCache['commodities'];
-          final List<Map<String, dynamic>> typedCommodities = tempCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
-          
-          // Log forecast data to verify it's loaded correctly
-          print("🔍 Loaded forecast commodities for $forecastPeriod: ${typedCommodities.length}");
-          
-          // Extract forecast data for UI display
-          final forecastEntries = typedCommodities.where((commodity) => commodity['is_forecast'] == true).toList();
-          if (forecastEntries.isNotEmpty) {
-            print("🔍 Number of forecast entries: ${forecastEntries.length}");
-            
-            // Find the latest non-forecast entry for comparison
-            final latestNonForecast = typedCommodities.where((commodity) => commodity['is_forecast'] != true).toList();
-            if (latestNonForecast.isNotEmpty) {
-              print("🔍 Latest non-forecast entry found");
-            }
-            
-            // Get the first forecast entry (Next Week)
-            final firstForecast = forecastEntries.isNotEmpty ? forecastEntries[0] : null;
-            if (firstForecast != null) {
-              print("🔍 First forecast: Price = ${firstForecast['weekly_average_price']}, Date = ${firstForecast['price_date']}");
-            }
-            
-            // Get the second forecast entry (Two Weeks) if available
-            final secondForecast = forecastEntries.length > 1 ? forecastEntries[1] : null;
-            if (secondForecast != null) {
-              print("🔍 Second forecast: Price = ${secondForecast['weekly_average_price']}, Date = ${secondForecast['price_date']}");
-            }
-          }
-          
-          // Get filtered commodities from the cache
-          final List<dynamic> tempFilteredCommodities = forecastCache['filteredCommodities'] ?? tempCommodities;
-          final List<Map<String, dynamic>> typedFilteredCommodities = tempFilteredCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
-            // Update the UI
-          final cachedSort = await DataCache.getSelectedSort();
-          setState(() {
-            commodities = typedCommodities;
-            filteredCommodities = typedFilteredCommodities;
-            globalPriceDate = forecastCache['globalPriceDate'] ?? "";
-            selectedForecast = forecastPeriod;
-            selectedSort = forecastCache['selectedSort'] ?? cachedSort;
-          });
-          print("✅ Successfully loaded forecast data from cache for $forecastPeriod");
-          return true;
-        } else {
-          print("⚠️ No valid forecast cache found for $forecastPeriod, falling back to regular cache");
-        }
+      // Load from forecast-specific cache for all periods including "Now"
+      final forecastCache = await ForecastCacheManager.getCachedForecastData(forecastPeriod);
+      if (forecastCache != null && forecastCache['commodities'] != null) {
+        final List<dynamic> tempCommodities = forecastCache['commodities'];
+        final List<Map<String, dynamic>> typedCommodities = tempCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
+        
+        // Log forecast data to verify it's loaded correctly
+        print("🔍 Loaded forecast commodities for $forecastPeriod: ${typedCommodities.length}");
+        
+        // Get filtered commodities from the cache
+        final List<dynamic> tempFilteredCommodities = forecastCache['filteredCommodities'] ?? tempCommodities;
+        final List<Map<String, dynamic>> typedFilteredCommodities = tempFilteredCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
+        
+        // Update the UI
+        final cachedSort = await DataCache.getSelectedSort();
+        setState(() {
+          commodities = typedCommodities;
+          filteredCommodities = typedFilteredCommodities;
+          globalPriceDate = forecastCache['globalPriceDate'] ?? "";
+          selectedForecast = forecastPeriod;
+          selectedSort = forecastCache['selectedSort'] ?? cachedSort;
+        });
+        print("✅ Successfully loaded forecast data from cache for $forecastPeriod");
+        return true;
       }
       
-      // Fall back to regular cache for "Now" view or if forecast cache not found
-      final isCacheValid = await DataCache.isCacheValid();
-      if (!isCacheValid) {
-        print("🔄 Cache expired or not found, will fetch from network");
-        return false;
-      }
-      
-      // Get data from cache
-      List<dynamic> tempCommodities = await DataCache.getCommodities();
-      List<dynamic> tempFilteredCommodities = await DataCache.getFilteredCommodities();
-      
-      // Convert to the required type
-      List<Map<String, dynamic>> typedCommodities = 
-          tempCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
-      
-      List<Map<String, dynamic>> typedFilteredCommodities = 
-          tempFilteredCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
-      
-      final cachedGlobalPriceDate = await DataCache.getGlobalPriceDate();
-      final cachedSort = await DataCache.getSelectedSort();
-      
-      // Validate cached data
-      if (typedCommodities.isEmpty) {
-        print("⚠️ Cached commodities list is empty");
-        return false;
-      }
-      
-      // Set up default values for missing data
-      final effectiveFilteredCommodities = typedFilteredCommodities.isNotEmpty 
-          ? typedFilteredCommodities 
-          : List.from(typedCommodities);
-      
-      final effectiveGlobalPriceDate = cachedGlobalPriceDate.isNotEmpty
-          ? cachedGlobalPriceDate
-          : "";
-      
-      // Update the UI with cached data
-      setState(() {
-        commodities = typedCommodities;
-        filteredCommodities = effectiveFilteredCommodities.cast<Map<String, dynamic>>();
-        globalPriceDate = effectiveGlobalPriceDate;
-        selectedForecast = forecastPeriod;
-        selectedSort = cachedSort;
-      });
-      
-      print("✅ Loaded ${commodities.length} commodities and ${filteredCommodities.length} filtered commodities from regular cache");
-      print("✅ Using cached forecast period: $selectedForecast");
-      print("✅ Using cached sort option: $selectedSort");
-      
-      return true;
+      print("⚠️ No valid forecast cache found for $forecastPeriod");
+      return false;
     } catch (e) {
       print("❌ Error loading data from cache: $e");
       return false;
@@ -310,10 +235,18 @@ class _HomePageState extends State<HomePage> {
             print("🔄 No forecast cache for $selectedForecast, fetching from Firestore");
             fetchCommodities();
           }
+        });      } else {
+        // First load without a forecast change - still check cache first
+        print("🔄 First initialization - checking cache before fetching");
+        _loadFromCache().then((loadedFromCache) {
+          if (!loadedFromCache) {
+            // If cache loading failed, fetch from Firestore
+            print("❌ No valid cache found on first load, fetching from Firestore");
+            fetchCommodities();
+          } else {
+            print("✅ Successfully loaded data from cache on first load");
+          }
         });
-      } else {
-        // First load without a forecast change
-        fetchCommodities();
       }
       
       _dataInitialized = true;
@@ -430,13 +363,25 @@ class _HomePageState extends State<HomePage> {
               // Use the actual forecast period from the data rather than the selectedForecast
               dateDisplay = "$formattedDate ($forecastPeriod)";
             }
+              // Update commodity entry with price info
+            // Only use this price if it matches our selected forecast period
+            bool shouldUsePrice = false;
+            if (selectedForecast == "Now" && !isForecast) {
+              shouldUsePrice = true;
+            } else if (selectedForecast == forecastPeriod) {
+              // For forecast views, only use prices that match our selected period
+              shouldUsePrice = true;
+            }
             
-            // Update commodity entry with price info
-            commodityEntry['weekly_average_price'] = price;
-            commodityEntry['price_date'] = dateDisplay; // Use enhanced dateDisplay that includes forecast period
-            commodityEntry['is_forecast'] = isForecast;
-            commodityEntry['forecast_period'] = forecastPeriod; // Store the forecast period
-            commodityEntry['is_global_date'] = isGlobalDate; // Store whether this price is from the global date
+            if (shouldUsePrice) {
+              commodityEntry['weekly_average_price'] = price;
+              commodityEntry['price_date'] = dateDisplay; // Use enhanced dateDisplay that includes forecast period
+              commodityEntry['is_forecast'] = isForecast;
+              commodityEntry['forecast_period'] = forecastPeriod; // Store the forecast period
+              commodityEntry['is_global_date'] = isGlobalDate; // Store whether this price is from the global date
+              
+              print("💰 Selected price for ${COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? commodityId}: ₱$price ($formattedDate) ${isForecast ? '(Forecast - $forecastPeriod)' : ''} ${isGlobalDate ? '[GLOBAL DATE]' : ''}");
+            }
             
             print("💰 Price data for ${COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? commodityId}: ₱$price ($formattedDate) ${isForecast ? '(Forecast - $forecastPeriod)' : ''} ${isGlobalDate ? '[GLOBAL DATE]' : ''}");
           } else {
@@ -482,26 +427,23 @@ class _HomePageState extends State<HomePage> {
       await DataCache.saveSelectedForecast(selectedForecast);
       await DataCache.saveGlobalPriceDate(globalPriceDate);
       print("✅ Saved commodity data to cache");
+        // Save forecast data to specific forecast cache for all periods (including "Now")
+      final forecastData = {
+        'commodities': commodities,
+        'filteredCommodities': filteredCommodities,
+        'globalPriceDate': globalPriceDate,
+        'selectedSort': selectedSort,
+      };
       
-      // Save forecast data to specific forecast cache
-      if (selectedForecast == "Next Week" || selectedForecast == "Two Weeks") {
-        final forecastData = {
-          'commodities': commodities,
-          'filteredCommodities': filteredCommodities,
-          'globalPriceDate': globalPriceDate,
-          'selectedSort': selectedSort,
-        };
-        
-        await ForecastCacheManager.saveForecastData(selectedForecast, forecastData);
-        print("✅ Saved forecast data to forecast-specific cache for $selectedForecast");
-        
-        // Verify the cache was saved
-        final savedCache = await ForecastCacheManager.getCachedForecastData(selectedForecast);
-        if (savedCache != null) {
-          print("✅ Verified forecast cache exists for $selectedForecast containing ${savedCache['commodities']?.length ?? 0} commodities");
-        } else {
-          print("⚠️ Failed to verify forecast cache for $selectedForecast");
-        }
+      await ForecastCacheManager.saveForecastData(selectedForecast, forecastData);
+      print("✅ Saved forecast data to forecast-specific cache for $selectedForecast");
+      
+      // Verify the cache was saved
+      final savedCache = await ForecastCacheManager.getCachedForecastData(selectedForecast);
+      if (savedCache != null) {
+        print("✅ Verified forecast cache exists for $selectedForecast containing ${savedCache['commodities']?.length ?? 0} commodities");
+      } else {
+        print("⚠️ Failed to verify forecast cache for $selectedForecast");
       }
     } catch (e) {
       print("❌ Error fetching commodities: $e");
@@ -793,14 +735,26 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
               )
-            else
-              Row(
+            else              Row(
                 children: [
                   // Refresh button
                   IconButton(
                     icon: Icon(Icons.refresh, color: kBlue),
                     onPressed: refreshDataFromFirestore,
                     tooltip: 'Refresh data',
+                  ),
+                  // Force refresh button - always fetch from Firestore regardless of cache
+                  IconButton(
+                    icon: Icon(Icons.update, color: kBlue),
+                    onPressed: () {
+                      // Clear the forecast cache for the current period first
+                      ForecastCacheManager.invalidateForecastCache(selectedForecast).then((_) {
+                        // Then fetch from Firestore
+                        print("🔄 Forced refresh requested. Cache cleared for $selectedForecast");
+                        fetchCommodities();
+                      });
+                    },
+                    tooltip: 'Force refresh from Firestore',
                   ),
                   // Search button
                   IconButton(
@@ -1241,9 +1195,8 @@ class _HomePageState extends State<HomePage> {
                                           ],
                                         ),
                                         margin: const EdgeInsets.only(top: 8.0),                                        child: Column(
-                                          children: [
-                                            Text(
-                                              "Latest price: ₱${price is double ? price.toStringAsFixed(2) : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2)}",
+                                          children: [                                            Text(
+                                              "${selectedForecast == 'Now' ? 'Latest price' : selectedForecast + ' price'}: ₱${price is double ? price.toStringAsFixed(2) : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2)}",
                                               style: TextStyle(
                                                 fontSize: 16,
                                                 color: kBlue,
@@ -1587,10 +1540,25 @@ class _HomePageState extends State<HomePage> {
                   );
                 }
               );
-              
-              try {
-                // Refresh all commodity prices with the new forecast setting
-                await fetchCommodities();
+                try {
+                // First check if we have valid cache for this forecast period
+                final forecastCache = await ForecastCacheManager.getCachedForecastData(text);
+                if (forecastCache != null) {
+                  print("✅ Using cached forecast data for $text");
+                  // Load from cache instead of fetching from Firestore
+                  bool loadedFromCache = await _loadFromCache();
+                  if (!loadedFromCache) {
+                    // Only fetch from Firestore if cache loading failed
+                    print("❌ Failed to load from forecast cache, fetching from Firestore");
+                    await fetchCommodities();
+                  } else {
+                    print("✅ Successfully loaded from cache for forecast period: $text");
+                  }
+                } else {
+                  // No valid cache for this forecast period, fetch from Firestore
+                  print("🔄 No valid cache for $text, fetching from Firestore...");
+                  await fetchCommodities();
+                }
               } finally {
                 // Hide loading indicator
                 Navigator.of(context).pop();
