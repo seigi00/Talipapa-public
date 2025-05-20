@@ -19,14 +19,11 @@ class _ChatbotPageState extends State<ChatbotPage> {
   bool _isLoading = false;
 
   // Build full prompt in mistral-v7 format
-Future<String> _buildPrompt() async {
+String _buildPrompt() {
   final buffer = StringBuffer();
 
-  // Get forecast data for context
-  String forecastData = await ForecastCacheManager.getAllForecastDataForChatbot();
-
   // Inject context as system instruction
-  buffer.writeln('<|system|> You are Talipapa, a helpful chatbot in a mobile app that forecasts average market prices of goods in the Philippines. Here is the current forecast data:\n\n$forecastData\n\nUse this data to provide friendly and accurate responses about commodity prices and trends.');
+  buffer.writeln('<|system|> You are Talipapa, a helpful chatbot in a mobile app that forecasts average market prices of goods in the Philippines. Provide friendly and accurate responses.');
 
   for (var message in _messages) {
     if (message.containsKey('user')) {
@@ -59,7 +56,7 @@ Future<String> _buildPrompt() async {
     _messageController.clear();
 
     try {
-      final prompt = await _buildPrompt();
+      final prompt = _buildPrompt();
 
       // TODO: Change to your llama server URL & port
       final url = Uri.parse('https://llm.talipapa.shop/completions');
