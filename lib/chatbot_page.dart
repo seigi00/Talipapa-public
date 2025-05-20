@@ -58,7 +58,7 @@ String _buildPrompt() {
       final prompt = _buildPrompt();
 
       // TODO: Change to your llama server URL & port
-      final url = Uri.parse('https://josh-accidents-technical-trips.trycloudflare.com/completions');
+      final url = Uri.parse('https://llm.talipapa.shop/completions');
 
       final body = jsonEncode({
         "prompt": prompt,
