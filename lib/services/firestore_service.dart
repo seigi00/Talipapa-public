@@ -417,13 +417,12 @@ class FirestoreService {
           forecastsByCommodity[commodityId] = forecasts.sublist(0, 2);
         }
         
-        // Label forecasts as "next_week" and "two_weeks" where applicable
         if (forecasts.length >= 1) {
-          forecastsByCommodity[commodityId]![0]['forecast_period'] = "Next Week";
+          forecastsByCommodity[commodityId]![0]['forecast_period'] = "Current Week";
         }
         
         if (forecasts.length >= 2) {
-          forecastsByCommodity[commodityId]![1]['forecast_period'] = "Two Weeks";
+          forecastsByCommodity[commodityId]![1]['forecast_period'] = "Next Week";
         }
       });
       

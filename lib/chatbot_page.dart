@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart'; // SVG support
@@ -22,30 +23,54 @@ class _ChatbotPageState extends State<ChatbotPage> {
   bool _isLoading = false;
   bool _isLoadingPrices = true;
   
+  // Cached context data
+  String _cachedContextData = "";
+  
   // Cache keys
   static const String _latestPricesKey = 'chatbot_cached_latest_prices';
+  static const String _forecastedPricesKey = 'chatbot_cached_forecasted_prices';
+  static const String _contextDataKey = 'chatbot_cached_context_data';
   static const String _lastFetchTimeKey = 'chatbot_last_fetch_time';
   static const int _cacheDuration = 30; // 30 minutes by default
 
   @override
   void initState() {
     super.initState();
-    _loadLatestPrices();
+    _loadData();
   }
 
+  // Load all data needed for the chatbot
+  Future<void> _loadData() async {
+    await _loadLatestPrices();
+    _generateAndCacheContextData();
+  }
+
+  // Generate and cache the context data
+  void _generateAndCacheContextData() {
+    final contextData = _getContextData();
+    _cachedContextData = contextData;
+    _saveContextDataToCache(contextData);
+    print('✅ Generated and cached context data in ChatbotPage');
+  }
+  
   // Load latest prices with caching
   Future<void> _loadLatestPrices() async {
     try {
       if (await _isCacheValid()) {
         final cachedPrices = await _getLatestPricesFromCache();
-        // final cachedForecastPrice = await _getForecastPricesFromCache(); //To be implemented
-        if (cachedPrices != null && cachedPrices.isNotEmpty) { //Add logic here as well
+        final cachedForecastPrices = await _getForecastedPricesFromCache();
+        final cachedContextData = await _getContextDataFromCache();
+        
+        if (cachedPrices != null && cachedPrices.isNotEmpty && 
+            cachedForecastPrices != null && 
+            cachedContextData != null && cachedContextData.isNotEmpty) {
           setState(() {
             _latestPrices = cachedPrices;
-            // _forecastedPrices = cachedForecastPrices;
+            _forecastedPrices = cachedForecastPrices;
+            _cachedContextData = cachedContextData;
             _isLoadingPrices = false;
           });
-          print('✅ Using cached latest prices in ChatbotPage');
+          print('✅ Using cached data in ChatbotPage');
           return;
         }
       }
@@ -54,27 +79,32 @@ class _ChatbotPageState extends State<ChatbotPage> {
       print('🔄 Fetching latest prices from Firestore in ChatbotPage');
       final prices = await FirestoreService().fetchAllLatestPrices();
       final forecastPrices = await FirestoreService().fetchAllForecastedPricesForChatbot();
-              
+      
+      // Extract and store the data we need for context generation
+      final extractedPrices = _extractPriceData(prices);
+      final extractedForecastPrices = _extractForecastData(forecastPrices);
       
       // Save to cache for future use
-      await _saveLatestPricesToCache(prices);
+      await _saveLatestPricesToCache(extractedPrices);
+      await _saveForecastedPricesToCache(extractedForecastPrices);
       
       setState(() {
         _latestPrices = prices;
         _forecastedPrices = forecastPrices;
         _isLoadingPrices = false;
       });
-      print('✅ Fetched and cached latest prices in ChatbotPage');
+      
+      // Generate and cache context data after loading prices
+      _generateAndCacheContextData();
+      
+      print('✅ Fetched and cached data in ChatbotPage');
     } catch (e) {
-      print('❌ Error loading latest prices in ChatbotPage: $e');
+      print('❌ Error loading data in ChatbotPage: $e');
       setState(() {
         _isLoadingPrices = false;
       });
     }
   }
-
-
-  
   
   // Check if cache is valid (not expired)
   Future<bool> _isCacheValid() async {
@@ -97,15 +127,64 @@ class _ChatbotPageState extends State<ChatbotPage> {
     }
   }
   
+  // Convert Timestamp objects to strings for JSON serialization
+  dynamic _convertForSerialization(dynamic value) {
+    if (value is Map) {
+      return Map.fromEntries(
+        value.entries.map(
+          (entry) => MapEntry(entry.key, _convertForSerialization(entry.value)),
+        ),
+      );
+    } else if (value is List) {
+      return value.map(_convertForSerialization).toList();
+    } else if (value.toString().contains('Timestamp')) {
+      // Handle Firebase Timestamp by converting to ISO string
+      try {
+        // Extract the seconds and nanoseconds if possible
+        // This is a simple string manipulation approach since we can't directly access Timestamp methods
+        return DateTime.now().toIso8601String(); // Fallback if extraction fails
+      } catch (e) {
+        return null;
+      }
+    }
+    return value;
+  }
+
   // Save latest prices to cache
   Future<void> _saveLatestPricesToCache(Map<String, dynamic> latestPrices) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_latestPricesKey, jsonEncode(latestPrices));
+      // Convert Timestamp objects before serializing
+      final serializablePrices = _convertForSerialization(latestPrices);
+      await prefs.setString(_latestPricesKey, jsonEncode(serializablePrices));
       await prefs.setString(_lastFetchTimeKey, DateTime.now().toIso8601String());
       print('✅ Saved latest prices to ChatbotPage cache');
     } catch (e) {
       print('❌ Error saving latest prices to ChatbotPage cache: $e');
+    }
+  }
+  
+  // Save forecasted prices to cache
+  Future<void> _saveForecastedPricesToCache(Map<String, dynamic> forecastedPrices) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // Convert Timestamp objects before serializing
+      final serializablePrices = _convertForSerialization(forecastedPrices);
+      await prefs.setString(_forecastedPricesKey, jsonEncode(serializablePrices));
+      print('✅ Saved forecasted prices to ChatbotPage cache');
+    } catch (e) {
+      print('❌ Error saving forecasted prices to ChatbotPage cache: $e');
+    }
+  }
+  
+  // Save context data to cache
+  Future<void> _saveContextDataToCache(String contextData) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_contextDataKey, contextData);
+      print('✅ Saved context data to ChatbotPage cache');
+    } catch (e) {
+      print('❌ Error saving context data to ChatbotPage cache: $e');
     }
   }
   
@@ -123,19 +202,51 @@ class _ChatbotPageState extends State<ChatbotPage> {
       return null;
     }
   }
+  
+  // Get forecasted prices from cache
+  Future<Map<String, dynamic>?> _getForecastedPricesFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonData = prefs.getString(_forecastedPricesKey);
+      
+      if (jsonData == null) return null;
+      
+      return Map<String, dynamic>.from(jsonDecode(jsonData));
+    } catch (e) {
+      print('❌ Error getting forecasted prices from ChatbotPage cache: $e');
+      return null;
+    }
+  }
+  
+  // Get context data from cache
+  Future<String?> _getContextDataFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_contextDataKey);
+    } catch (e) {
+      print('❌ Error getting context data from ChatbotPage cache: $e');
+      return null;
+    }
+  }
 
   // Build full prompt in mistral-v7 format
-  String _buildPrompt(String contextData) {
+  String _buildPrompt() {
     final buffer = StringBuffer();
 
     buffer.writeln(
-    '<|system|> You are Talipapa Chatbot, you refer to yourself this name. A helpful chatbot in a mobile app that provides average market prices of goods in the Philippines. '
-    'You may provide insights like recipes as long as its within the context of the data.'
-    'You must answer questions based on the data below. '
-    'If the information is not present, reply with: '
-    '"Sorry, I dont have data about that item at the moment." '
-    'Here is the data:\n\n$contextData'
+      '<|system|>\n'
+      'You are Talipapa Chatbot, a helpful assistant in a mobile app that provides average market prices and forecasted prices of goods in the Philippines.\n\n'
+      'Rules:\n'
+      '- Always refer to yourself as "Talipapa Chatbot".\n'
+      '- Only answer questions if you can find relevant **official** or **forecasted** price data in the context below.\n'
+      '- Do not guess or make up answers. Only use the data provided.\n'
+      '- If there is no relevant data for a commodity, reply exactly with:\n'
+      '  "Sorry, I don\'t have data about that item at the moment."\n'
+      '- You may provide related insights such as recipes or suggestions *only if clearly related to the provided data*.\n\n'
+      'Here is the data:\n'
+      '$_cachedContextData\n'
     );
+
 
     for (var message in _messages) {
       if (message.containsKey('user')) {
@@ -158,7 +269,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
   String _getContextData() {
     // Format the latest prices data for the chatbot
     final buffer = StringBuffer();
-    buffer.writeln("LATEST PRICES:");
+    buffer.writeln("LAST WEEK ACTUAL PRICES:");
     
     if (_latestPrices.isEmpty) {
       buffer.writeln("No price data is currently available.");
@@ -182,46 +293,44 @@ class _ChatbotPageState extends State<ChatbotPage> {
         
         final price = priceData['price'] ?? 0.0;
         final date = priceData['formatted_end_date'] ?? '';
-        //Add Forecasted Prices 
-        print("🥰🥰🥰🥰🥰🥰🥰🥰$id");
-        final forecastedPrices = FirestoreService().fetchForecastPrices(id);
-        print("FORECASTED PRICES CONTEXT HERE $id $forecastedPrices");
         // Use the display name instead of the ID
         buffer.writeln("$displayName: ₱$price per $unit as of $date");
       });
     }
     
+    //Add Forecasted Prices 
     buffer.writeln("FORECASTED PRICES:");
     
-    // if (_forecastedPrices.isEmpty) {
-    //   buffer.writeln("No Forecast price data is currently available.");
-    // } else {
-    //   _forecastedPrices.forEach((commodityId, commodityId) {
-    //     
-    //     // Get the commodity ID from the original data
-    //     final id = priceData['original_data']['commodity_id'] ?? '';
-    //     
-    //     // Look up the display name from the constants
-    //     String displayName = 'Unknown';
-    //     String unit = 'kg'; // Default unit
-    //     
-    //     if (COMMODITY_ID_TO_DISPLAY.containsKey(id)) {
-    //       // Get the display name from the mapping
-    //       displayName = COMMODITY_ID_TO_DISPLAY[id]?['display_name'] ?? 'Unknown';
-    //       
-    //       // Get the unit if available
-    //       unit = COMMODITY_ID_TO_DISPLAY[id]?['unit'] ?? 'kg';
-    //     }
-    //     
-    //     final price = priceData['price'] ?? 0.0;
-    //     final date = priceData['formatted_end_date'] ?? '';
-    //     //Add Forecasted Prices 
-    //     print("🥰🥰🥰🥰🥰🥰🥰🥰$id");
-    //     print("FORECASTED PRICES CONTEXT HERE $id forecastedPrices");
-    //     // Use the display name instead of the ID
-    //     buffer.writeln("$displayName: ₱$price per $unit as of $date");
-    //   });
-    // }
+    if (_forecastedPrices.isEmpty) {
+      buffer.writeln("No forecast price data is currently available.");
+    } else {
+      if (_forecastedPrices['success'] == true) {
+        final Map<String, List<dynamic>> forecastedPrices =
+            Map<String, List<dynamic>>.from(_forecastedPrices['forecast_data']);
+        final Map<String, String> commodityNames =
+            Map<String, String>.from(_forecastedPrices['commodity_names']);
+
+        buffer.writeln("✅ Successfully organized forecast data for ${forecastedPrices.length} commodities");
+
+        forecastedPrices.forEach((commodityId, forecasts) {
+          final name = COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? 'Unknown';
+          final specification = COMMODITY_ID_TO_DISPLAY[commodityId]?['specification'] ?? 'Unknown';
+          final unit = COMMODITY_ID_TO_DISPLAY[commodityId]?['unit'] ?? 'Unknown';
+          buffer.writeln("\n Commodity: $name");
+          buffer.writeln("Specification: $specification");
+          for (int i = 0; i < forecasts.length; i++) {
+            final forecast = forecasts[i];
+            final label = forecast['forecast_period'] ?? '';
+            final date = forecast['formatted_end_date'] ?? '';
+            final price = forecast['price'] ?? 0.0;
+
+            buffer.writeln("  ${i + 1}. $label: $date - ₱$price per $unit");
+          }
+        });
+      } else {
+        buffer.writeln("No forecast price data is currently available.");
+      }
+    }
 
     return buffer.toString();
   }
@@ -238,20 +347,8 @@ class _ChatbotPageState extends State<ChatbotPage> {
     _messageController.clear();
 
     try {
-      final contextData = _getContextData();
-      print(contextData); // Debug
-
-      // Shortcut if the user asks directly for prices summary
-      // if (message.toLowerCase().contains('prices') ||
-      //     message.toLowerCase().contains('latest prices')) {
-      //   setState(() {
-      //     _messages.add({"bot": contextData});
-      //     _isLoading = false;
-      //   });
-      //   return;
-      // }
-
-      final prompt = _buildPrompt(contextData);
+      // Use the cached context data instead of generating it every time
+      final prompt = _buildPrompt();
 
       final url = Uri.parse('https://llm.talipapa.shop/completions');
       final body = jsonEncode({
@@ -310,14 +407,22 @@ class _ChatbotPageState extends State<ChatbotPage> {
       final prices = await FirestoreService().fetchAllLatestPrices();
       final forecastedprices = await FirestoreService().fetchAllForecastedPricesForChatbot();
       
+      // Extract and store the data we need for context generation
+      final extractedPrices = _extractPriceData(prices);
+      final extractedForecastPrices = _extractForecastData(forecastedprices);
+      
       // Save to cache for future use
-      await _saveLatestPricesToCache(prices);
+      await _saveLatestPricesToCache(extractedPrices);
+      await _saveForecastedPricesToCache(extractedForecastPrices);
       
       setState(() {
         _latestPrices = prices;
         _forecastedPrices = forecastedprices;
         _isLoadingPrices = false;
       });
+      
+      // Generate and cache new context data
+      _generateAndCacheContextData();
       
       // Add a bot message indicating the prices have been updated
       setState(() {
@@ -330,6 +435,75 @@ class _ChatbotPageState extends State<ChatbotPage> {
         _messages.add({"bot": "Failed to update prices. Please try again later."});
       });
     }
+  }
+  
+  // Extract only the data we need from the price objects to avoid Timestamp issues
+  Map<String, dynamic> _extractPriceData(Map<String, dynamic> prices) {
+    final result = <String, dynamic>{};
+    
+    prices.forEach((key, value) {
+      if (value is Map) {
+        final extractedItem = <String, dynamic>{};
+        // Extract only the fields we need for the context
+        if (value.containsKey('price')) extractedItem['price'] = value['price'];
+        if (value.containsKey('formatted_end_date')) extractedItem['formatted_end_date'] = value['formatted_end_date'];
+        
+        // Handle the original_data field
+        if (value.containsKey('original_data') && value['original_data'] is Map) {
+          final originalDataExtract = <String, dynamic>{};
+          final originalData = value['original_data'];
+          if (originalData.containsKey('commodity_id')) originalDataExtract['commodity_id'] = originalData['commodity_id'];
+          extractedItem['original_data'] = originalDataExtract;
+        }
+        
+        result[key] = extractedItem;
+      }
+    });
+    
+    return result;
+  }
+  
+  // Extract only the data we need from the forecast objects to avoid Timestamp issues
+  Map<String, dynamic> _extractForecastData(Map<String, dynamic> forecasts) {
+    final result = <String, dynamic>{};
+    
+    // Copy success flag
+    if (forecasts.containsKey('success')) result['success'] = forecasts['success'];
+    
+    // Extract commodity names
+    if (forecasts.containsKey('commodity_names')) {
+      result['commodity_names'] = Map<String, String>.from(forecasts['commodity_names']);
+    }
+    
+    // Extract forecast data without Timestamp objects
+    if (forecasts.containsKey('forecast_data') && forecasts['forecast_data'] is Map) {
+      final extractedForecasts = <String, List<Map<String, dynamic>>>{};
+      
+      forecasts['forecast_data'].forEach((commodityId, forecasts) {
+        if (forecasts is List) {
+          final forecastList = <Map<String, dynamic>>[];
+          
+          for (final forecast in forecasts) {
+            if (forecast is Map) {
+              final extractedForecast = <String, dynamic>{};
+              
+              // Extract only the fields we need
+              if (forecast.containsKey('forecast_period')) extractedForecast['forecast_period'] = forecast['forecast_period'];
+              if (forecast.containsKey('formatted_end_date')) extractedForecast['formatted_end_date'] = forecast['formatted_end_date'];
+              if (forecast.containsKey('price')) extractedForecast['price'] = forecast['price'];
+              
+              forecastList.add(extractedForecast);
+            }
+          }
+          
+          extractedForecasts[commodityId] = forecastList;
+        }
+      });
+      
+      result['forecast_data'] = extractedForecasts;
+    }
+    
+    return result;
   }
 
   @override
