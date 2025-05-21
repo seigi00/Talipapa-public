@@ -127,7 +127,7 @@ String _buildPrompt() {
               Text(
                 "Talipapa Chat",
                 style: TextStyle(
-                  fontFamily: 'CourierPrime',
+                  fontFamily: 'Raleway',
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
                   color: kBlue,

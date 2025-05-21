@@ -458,7 +458,7 @@ class _HomePageState extends State<HomePage> {
         Map<String, dynamic> commodityEntry = {
           'id': commodityId,
           'weekly_average_price': 0.0,
-          'price_date': '',  // Empty string instead of 'No data'
+          'price_date': '',  // Empty string instead of 'Insufficient Data'
           'is_forecast': false,  // Default to false
           // Add any other fields from the commodity document
           ...commodityData,
@@ -912,10 +912,10 @@ class _HomePageState extends State<HomePage> {
                             : selectedForecast == "Next Week"
                                 ? forecastStartDate.isEmpty
                                     ? "Forecast Prices for Next Week"
-                                    : "Forecast Prices for this Week (Starting $forecastStartDate)"
+                                    : "Forecasted Prices for this Week (Starting $forecastStartDate)"
                                 : forecastStartDate.isEmpty
                                     ? "Forecast Prices for Two Weeks"
-                                    : "Forecast Prices Next Week (Starting $forecastStartDate)",
+                                    : "Forecasted Prices for Next Week (Starting $forecastStartDate)",
                     style: TextStyle(
                       color: kBlue,
                       fontSize: 12,
@@ -947,9 +947,11 @@ class _HomePageState extends State<HomePage> {
                             colors: [Colors.white, const Color(0xFFF8F8FF)],
                           ),
                     
-                        ),
-                        child: selectedCommodityId == null
+                        ),                            child: selectedCommodityId == null
                             ? Center(child: Text("Select a commodity to see price graph"))
+                            : _hasInsufficientData(selectedCommodityId!)
+                            ? Center(child: Text("Graph disabled - Insufficient data available",
+                                style: TextStyle(fontSize: 14, color: Colors.grey)))
                             : FutureBuilder<List<Map<String, dynamic>>>(
                                 future: firestoreService.fetchWeeklyPrices(selectedCommodityId!),
                                 builder: (context, snapshot) {
@@ -1913,9 +1915,7 @@ class _HomePageState extends State<HomePage> {
     // Get the price and date
     final price = commodity['weekly_average_price'];
     final priceDate = commodity['price_date'] ?? '';
-    final isForecast = commodity['is_forecast'] ?? false;
-    
-    // Handle empty price display
+    final isForecast = commodity['is_forecast'] ?? false;                // Handle empty price display
     final bool hasPriceData = price != null && price.toString().isNotEmpty && price != 0.0;
     final String formattedPrice = !hasPriceData 
         ? "-" 
@@ -1933,6 +1933,10 @@ class _HomePageState extends State<HomePage> {
           ? commodity['last_historical_price'].toStringAsFixed(2)
           : (double.tryParse(commodity['last_historical_price'].toString()) ?? 0.0).toStringAsFixed(2)
       : "-";
+      
+    // Get historical date if available
+    final String historicalDate = hasHistoricalPrice && commodity['last_historical_date'] != null ? 
+      commodity['last_historical_date'].toString() : "";
 
     // Alternate background color based on index
     final backgroundColor = index % 2 == 0 ? Colors.white : kAltGray;
@@ -2027,8 +2031,7 @@ class _HomePageState extends State<HomePage> {
                     fontSize: 20,
                     color: (hasPriceData || (hasHistoricalPrice && selectedForecast == "Now")) ? null : Colors.grey
                   ),
-                ),
-                // Show data status
+                ),                // Show data status
                 if (!hasPriceData && !hasHistoricalPrice)
                   Container(
                     margin: EdgeInsets.only(top: 4),
@@ -2037,13 +2040,31 @@ class _HomePageState extends State<HomePage> {
                       color: Colors.grey.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.grey.withOpacity(0.3), width: 1),
-                    ),
-                    child: Text(
-                      selectedForecast != "Now" ? "Insufficient data" : "No data",
+                    ),                    child: Text(
+                      "Insufficient Data",
                       style: TextStyle(
                         fontWeight: FontWeight.w500,
                         fontSize: 11,
                         color: Colors.grey,
+                      ),
+                    ),
+                  )
+                // Show historical date if we're showing a historical price
+                else if (hasHistoricalPrice && historicalDate.isNotEmpty)
+                  Container(
+                    margin: EdgeInsets.only(top: 4),
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.amber.withOpacity(0.3), width: 1),
+                    ),
+                    child: Text(
+                      "Historical: $historicalDate",
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 11,
+                        color: Colors.amber.shade800,
                       ),
                     ),
                   )
@@ -2082,14 +2103,34 @@ class _HomePageState extends State<HomePage> {
         ),
       ),
     );
-  }
-  List<String> getAllCommodities() {
+  }  List<String> getAllCommodities() {
     List<String> allCommodities = [];
     COMMODITY_ID_TO_DISPLAY.forEach((id, details) {
       allCommodities.add(id);
     });
     return allCommodities;
-  }  // Helper to apply filters
+  }
+  
+  // Check if commodity has insufficient data (needs graph disabled)
+  bool _hasInsufficientData(String commodityId) {
+    if (commodityId.isEmpty) return true;
+    
+    // Find the commodity in our list
+    final commodity = commodities.firstWhere(
+      (c) => c['id'].toString() == commodityId,
+      orElse: () => {'weekly_average_price': null, 'price_date': 'Insufficient Data'},
+    );
+    
+    // Check for missing price data
+    final price = commodity['weekly_average_price'];
+    final priceDate = commodity['price_date'] ?? '';
+    final hasNoPrice = price == null || price.toString().isEmpty || price == 0.0;
+    final hasNoHistoricalPrice = commodity['last_historical_price'] == null || 
+                               commodity['last_historical_price'].toString().isEmpty || 
+                               commodity['last_historical_price'] == 0.0;
+    
+    return hasNoPrice && hasNoHistoricalPrice || priceDate == 'Insufficient Data';
+  }// Helper to apply filters
   List<Map<String, dynamic>> _applyFilter(
       List<Map<String, dynamic>> displayedCommodities,
       List<Map<String, dynamic>> allCommodities) {

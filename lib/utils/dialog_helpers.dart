@@ -175,9 +175,8 @@ Widget buildGlobalDateDisplay(String globalPriceDate, Color kBlue) {
 }
 
 // Helper method to check if a commodity date is different from global date
-bool isOlderDate(String commodityDate, String globalDate) {
-  if (commodityDate.isEmpty || 
-      commodityDate == "No data" || 
+bool isOlderDate(String commodityDate, String globalDate) {  if (commodityDate.isEmpty || 
+      commodityDate == "Insufficient Data" || 
       commodityDate == globalDate) {
     return false;
   }
