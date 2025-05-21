@@ -1473,11 +1473,11 @@ class _HomePageState extends State<HomePage> {
                               scrollDirection: Axis.horizontal,
                               child: Row(
                                 children: [
-                                  _forecastButton("Now"),
+                                  _forecastButton("Now", displayText: "Last Week"),
                                   SizedBox(width: 8), // Reduced spacing between buttons
-                                  _forecastButton("Next Week"),
+                                  _forecastButton("Next Week", displayText: "Current"),
                                   SizedBox(width: 8), // Reduced spacing between buttons
-                                  _forecastButton("Two Weeks"),
+                                  _forecastButton("Two Weeks", displayText: "Next Week"),
                                 ],
                               ),
                             ),
@@ -1747,32 +1747,34 @@ class _HomePageState extends State<HomePage> {
         bottomNavigationBar: CustomBottomNavBar(), // Use the reusable bottom navigation bar
       ),
     );
-  }  Widget _forecastButton(String text, {double height = 25}) {
+  }  Widget _forecastButton(String identifier, {String? displayText, double height = 25}) {
+    final textToDisplay = displayText ?? identifier;
+    
     return ConstrainedBox(
       constraints: BoxConstraints(minWidth: 100, maxWidth: 130), // Increased min and max width
       child: SizedBox(
         height: height,
         child: OutlinedButton(
           style: OutlinedButton.styleFrom(
-            side: BorderSide(color: selectedForecast == text ? kPink : kDivider),
-            backgroundColor: selectedForecast == text ? kPink.withOpacity(0.2) : Colors.transparent,
+            side: BorderSide(color: selectedForecast == identifier ? kPink : kDivider),
+            backgroundColor: selectedForecast == identifier ? kPink.withOpacity(0.2) : Colors.transparent,
             padding: EdgeInsets.symmetric(horizontal: 10, vertical: 0),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
           ),          onPressed: () async {
-            if (selectedForecast != text) {
+            if (selectedForecast != identifier) {
               // Save current commodity selection before changing forecast
               final currentCommodityId = selectedCommodityId;
               
               setState(() {
-                selectedForecast = text;
+                selectedForecast = identifier;
                 // Don't clear selectedCommodityId to preserve selection across forecast changes
                 // selectedFilter and selectedSort already remain unchanged (global settings)
               });
               
               // Save selected forecast to cache immediately
-              await DataCache.saveSelectedForecast(text);
+              await DataCache.saveSelectedForecast(identifier);
               
               // Show loading indicator
               showDialog(
@@ -1788,9 +1790,9 @@ class _HomePageState extends State<HomePage> {
               );
                 try {
                 // First check if we have valid cache for this forecast period
-                final forecastCache = await ForecastCacheManager.getCachedForecastData(text);
+                final forecastCache = await ForecastCacheManager.getCachedForecastData(identifier);
                 if (forecastCache != null) {
-                  print("✅ Using cached forecast data for $text");
+                  print("✅ Using cached forecast data for $identifier");
                   // Load from cache instead of fetching from Firestore
                   bool loadedFromCache = await _loadFromCache();
                   if (!loadedFromCache) {
@@ -1798,7 +1800,7 @@ class _HomePageState extends State<HomePage> {
                     print("❌ Failed to load from forecast cache, fetching from Firestore");
                     await fetchCommodities();
                   } else {
-                    print("✅ Successfully loaded from cache for forecast period: $text");
+                    print("✅ Successfully loaded from cache for forecast period: $identifier");
                     
                     // Make sure selected commodity is preserved after loading from cache
                     if (currentCommodityId != null) {
@@ -1810,7 +1812,7 @@ class _HomePageState extends State<HomePage> {
                   }
                 } else {
                   // No valid cache for this forecast period, fetch from Firestore
-                  print("🔄 No valid cache for $text, fetching from Firestore...");
+                  print("🔄 No valid cache for $identifier, fetching from Firestore...");
                   await fetchCommodities();
                   
                   // Also preserve commodity selection after Firestore fetch
@@ -1830,9 +1832,9 @@ class _HomePageState extends State<HomePage> {
           child: FittedBox(
             fit: BoxFit.scaleDown,
             child: Text(
-              text,
+              textToDisplay,
               style: TextStyle(
-                color: selectedForecast == text ? kPink : Colors.grey,
+                color: selectedForecast == identifier ? kPink : Colors.grey,
                 fontSize: 11,
                 fontWeight: FontWeight.w500,
               ),            ),
@@ -1868,14 +1870,11 @@ class _HomePageState extends State<HomePage> {
                           commodity['last_historical_price'] != null &&
                           commodity['last_historical_price'].toString().isNotEmpty &&
                           commodity['last_historical_price'] != 0.0;
-                          
-    final String historicalPrice = hasHistoricalPrice
+                            final String historicalPrice = hasHistoricalPrice
       ? (commodity['last_historical_price'] is double)
           ? commodity['last_historical_price'].toStringAsFixed(2)
           : (double.tryParse(commodity['last_historical_price'].toString()) ?? 0.0).toStringAsFixed(2)
       : "-";
-      
-    final String historicalDate = commodity['last_historical_date'] ?? '';
 
     // Alternate background color based on index
     final backgroundColor = index % 2 == 0 ? Colors.white : kAltGray;
@@ -2008,15 +2007,11 @@ class _HomePageState extends State<HomePage> {
                         color: kPink,
                       ),
                     ),
-                  )
-                // Show date for actual prices or historical prices in "Now" view
-                else if (selectedForecast == "Now")
+                  )                // Show date only for non-global prices in "Now" view
+                else if (selectedForecast == "Now" && hasPriceData && priceDate.isNotEmpty && 
+                        !(commodity['is_global_date'] ?? false))
                   Text(
-                    hasPriceData && priceDate.isNotEmpty
-                      ? "As of $priceDate"
-                      : hasHistoricalPrice && historicalDate.isNotEmpty
-                        ? "As of $historicalDate"
-                        : "",
+                    "As of $priceDate",
                     style: TextStyle(
                       fontSize: 11,
                       color: Colors.grey,
