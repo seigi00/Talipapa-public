@@ -156,8 +156,8 @@ class FirestoreService {
           .get();
       
       // Debug: Print the number of documents retrieved
-      print('❤️Retrieved ${snapshot.docs.length} forecast documents for commodity $commodityId');
-      print('❤️Retrieved ${snapshot.docs} forecast documents for commodity $commodityId');
+      // print('❤️Retrieved ${snapshot.docs.length} forecast documents for commodity $commodityId');
+      // print('❤️Retrieved ${snapshot.docs} forecast documents for commodity $commodityId');
       
       return snapshot.docs.map((doc) {
         final data = doc.data() as Map<String, dynamic>;
@@ -449,12 +449,12 @@ class FirestoreService {
       
       // Debug output
       print("✅ Successfully organized forecast data for ${forecastsByCommodity.length} commodities");
-      forecastsByCommodity.forEach((commodityId, forecasts) {
-        print("\n🔸 Commodity: $commodityId (${commodityNames[commodityId] ?? 'Unknown'})");
-        for (int i = 0; i < forecasts.length; i++) {
-          print("  ${i + 1}. ${forecasts[i]['forecast_period']}: ${forecasts[i]['formatted_end_date']} - ₱${forecasts[i]['price']}");
-        }
-      });
+      // forecastsByCommodity.forEach((commodityId, forecasts) {
+      //   print("\n🔸 Commodity: $commodityId (${commodityNames[commodityId] ?? 'Unknown'})");
+      //   for (int i = 0; i < forecasts.length; i++) {
+      //     print("  ${i + 1}. ${forecasts[i]['forecast_period']}: ${forecasts[i]['formatted_end_date']} - ₱${forecasts[i]['price']}");
+      //   }
+      // });
       
       return results;
     } catch (e) {

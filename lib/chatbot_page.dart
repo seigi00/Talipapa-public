@@ -31,7 +31,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
   static const String _forecastedPricesKey = 'chatbot_cached_forecasted_prices';
   static const String _contextDataKey = 'chatbot_cached_context_data';
   static const String _lastFetchTimeKey = 'chatbot_last_fetch_time';
-  static const int _cacheDuration = 30; // 30 minutes by default
+  static const int _cacheDuration = 15; // 30 minutes by default
 
   @override
   void initState() {
@@ -240,12 +240,14 @@ class _ChatbotPageState extends State<ChatbotPage> {
       '- Always refer to yourself as "Talipapa Chatbot".\n'
       '- Only answer questions if you can find relevant **official** or **forecasted** price data in the context below.\n'
       '- Do not guess or make up answers. Only use the data provided.\n'
+      '- If you are asked for forecasted prices without a specific commodity. You must not answer.\n'
       '- If there is no relevant data for a commodity, reply exactly with:\n'
       '  "Sorry, I don\'t have data about that item at the moment."\n'
       '- You may provide related insights such as recipes or suggestions *only if clearly related to the provided data*.\n\n'
       'Here is the data:\n'
       '$_cachedContextData\n'
     );
+
 
 
     for (var message in _messages) {
@@ -262,7 +264,9 @@ class _ChatbotPageState extends State<ChatbotPage> {
 
   // Clean the assistant's raw response by removing </s> and similar tags
   String _cleanResponse(String raw) {
-    return raw.replaceAll(RegExp(r'</?s>'), '').trim();
+    return raw
+    .replaceAll(RegExp(r'`'), '')
+    .replaceAll(RegExp(r'</?s>'), '').trim();
   }
 
   // Get context data for the chatbot, including latest prices
@@ -324,7 +328,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
             final date = forecast['formatted_end_date'] ?? '';
             final price = forecast['price'] ?? 0.0;
 
-            buffer.writeln("  ${i + 1}. $label: $date - ₱$price per $unit");
+            buffer.writeln("🔸 $label: $date - ₱$price per $unit");
           }
         });
       } else {
@@ -354,9 +358,9 @@ class _ChatbotPageState extends State<ChatbotPage> {
       final body = jsonEncode({
         "prompt": prompt,
         "cache_prompt": false,
-        "max_tokens": 700,
+        "max_tokens": 500,
         "top_p":0.9,
-        "temperature": 0.6,
+        "temperature": 0.9,
         "stop": ["<|user|>", "<|assistant|>"],
         "model": "capybarahermes-2.5-mistral-7b.Q4_K_M.gguf"
       });
