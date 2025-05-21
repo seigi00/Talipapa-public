@@ -600,7 +600,7 @@ class _HomePageState extends State<HomePage> {
     });
     print("Favorites loaded: $favoriteCommodities");
   }  Future<void> saveState() async {
-  // Save filter and sort globally (not forecast-specific)
+    // Save filter and sort globally (not forecast-specific)
     await DataCache.saveSelectedFilter(selectedFilter, "global");
     await DataCache.saveSelectedSort(selectedSort);
     
@@ -631,7 +631,8 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         selectedFilter = finalFilterValue;
         selectedSort = sortValue;
-      });      print("State loaded globally: Filter = $selectedFilter, Sort = $selectedSort");
+      });      
+      print("State loaded globally: Filter = $selectedFilter, Sort = $selectedSort");
       
       // Apply the loaded filter and sort
       _applyFiltersOnly();
@@ -781,11 +782,10 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
                 SizedBox(width: 8),
-                Expanded(
-                  child: Text(
+                Expanded(                  child: Text(
                     COMMODITY_ID_TO_DISPLAY[selectedCommodityId!]?['display_name'] ?? "Unknown",
                     style: TextStyle(
-                      fontFamily: 'CourierPrime',
+                      fontFamily: 'Raleway',
                       fontWeight: FontWeight.bold,
                       fontSize: 20,
                       color: kBlue,
@@ -793,11 +793,10 @@ class _HomePageState extends State<HomePage> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-              ] else ...[
-                Text(
+              ] else ...[                Text(
                   "Select a Commodity",
                   style: TextStyle(
-                    fontFamily: 'CourierPrime',
+                    fontFamily: 'Raleway',
                     fontWeight: FontWeight.bold,
                     fontSize: 20,
                     color: kBlue,
@@ -1459,11 +1458,10 @@ class _HomePageState extends State<HomePage> {
                       ),
                       SizedBox(height: 16),
                       Row(
-                        children: [
-                          Text(
+                        children: [                          Text(
                             "See:",
                             style: TextStyle(
-                              fontFamily: 'CourierPrime',
+                              fontFamily: 'Raleway',
                               fontWeight: FontWeight.bold,
                               color: kBlue,
                               fontSize: 14,
@@ -1764,12 +1762,13 @@ class _HomePageState extends State<HomePage> {
             ),
           ),          onPressed: () async {
             if (selectedForecast != text) {
+              // Save current commodity selection before changing forecast
+              final currentCommodityId = selectedCommodityId;
+              
               setState(() {
                 selectedForecast = text;
-                // Clear selected commodity when forecast changes
-                selectedCommodityId = null;
-                // Note: selectedFilter and selectedSort remain unchanged
-                // since they're now global settings
+                // Don't clear selectedCommodityId to preserve selection across forecast changes
+                // selectedFilter and selectedSort already remain unchanged (global settings)
               });
               
               // Save selected forecast to cache immediately
@@ -1800,11 +1799,27 @@ class _HomePageState extends State<HomePage> {
                     await fetchCommodities();
                   } else {
                     print("✅ Successfully loaded from cache for forecast period: $text");
+                    
+                    // Make sure selected commodity is preserved after loading from cache
+                    if (currentCommodityId != null) {
+                      setState(() {
+                        selectedCommodityId = currentCommodityId;
+                      });
+                      print("✅ Preserved selected commodity after forecast change: $currentCommodityId");
+                    }
                   }
                 } else {
                   // No valid cache for this forecast period, fetch from Firestore
                   print("🔄 No valid cache for $text, fetching from Firestore...");
                   await fetchCommodities();
+                  
+                  // Also preserve commodity selection after Firestore fetch
+                  if (currentCommodityId != null) {
+                    setState(() {
+                      selectedCommodityId = currentCommodityId;
+                    });
+                    print("✅ Preserved selected commodity after Firestore fetch: $currentCommodityId");
+                  }
                 }
               } finally {
                 // Hide loading indicator
@@ -1831,7 +1846,7 @@ class _HomePageState extends State<HomePage> {
     // Use your mapping for display name and other details
     final display = COMMODITY_ID_TO_DISPLAY[commodityId] ?? {};
     final String displayName = display['display_name'] ?? "Unknown Commodity";
-    final String unit = display['unit'] ?? "kg";
+    // Unit is not directly used in this method but may be needed for tooltips elsewhere
     final String specification = display["specification"] ?? "-";
     final String category = display["category"] ?? "-";
     
@@ -1849,7 +1864,7 @@ class _HomePageState extends State<HomePage> {
             : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2);
             
     // Check for last historical price (for "Now" view with no latest price)
-    final hasHistoricalPrice = selectedForecast == "Now" && !hasPriceData && 
+    final bool hasHistoricalPrice = selectedForecast == "Now" && !hasPriceData && 
                           commodity['last_historical_price'] != null &&
                           commodity['last_historical_price'].toString().isNotEmpty &&
                           commodity['last_historical_price'] != 0.0;
@@ -1861,10 +1876,6 @@ class _HomePageState extends State<HomePage> {
       : "-";
       
     final String historicalDate = commodity['last_historical_date'] ?? '';
-
-    // Track if we should show "As of" date
-    final bool showAsOfDate = (selectedForecast == "Now" && !isForecast && priceDate.isNotEmpty) || 
-                         (selectedForecast == "Now" && !hasPriceData && hasHistoricalPrice);
 
     // Alternate background color based on index
     final backgroundColor = index % 2 == 0 ? Colors.white : kAltGray;

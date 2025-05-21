@@ -131,11 +131,10 @@ class _SettingsPageState extends State<SettingsPage> {
       appBar: AppBar(
         backgroundColor: backgroundColor,
         elevation: 0,
-        centerTitle: true,
-        title: Center( // Center the "Settings" header horizontally
+        centerTitle: true,        title: Center( // Center the "Settings" header horizontally
           child: Text(
             "Settings",
-            style: TextStyle(color: textColor, fontFamily: 'CourierPrime', fontSize: 24, fontWeight: FontWeight.bold),
+            style: TextStyle(color: textColor, fontFamily: 'Raleway', fontSize: 24, fontWeight: FontWeight.bold),
           ),
         ),
       ),
