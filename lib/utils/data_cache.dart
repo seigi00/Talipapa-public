@@ -8,6 +8,7 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
   static const String _selectedForecastKey = 'selected_forecast';
   static const String _selectedCommodityKey = 'selected_commodity_details';
   static const String _selectedSortKey = 'selected_sort';
+  static const String _forecastStartDateKey = 'forecast_start_date';
   
   // Cache duration in minutes
   static const int _cacheDuration = 30; // 30 minutes by default
@@ -142,28 +143,34 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
     } catch (e) {
       print('Error getting selected commodity details from cache: $e');
       return null;
-    }  }
-  // Force refresh cache
+    }  }  // Force refresh cache
   static Future<void> invalidateCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      // Store sorting preference before invalidating cache
+      
+      // Store global sorting and filtering preferences before invalidating cache
       final sortPreference = await getSelectedSort();
+      final globalFilterPreference = await getSelectedFilter("global");
       
       // Remove all cache-related keys for a complete reset
       await prefs.remove(_lastFetchTimeKey);
       await prefs.remove(_commoditiesKey);
       await prefs.remove(_filteredCommoditiesKey);
       await prefs.remove(_globalPriceDateKey);
+      await prefs.remove(_forecastStartDateKey);
       
-      // Restore sorting preference after cache reset
+      // Restore global sorting and filtering preferences after cache reset
       if (sortPreference != null) {
         await saveSelectedSort(sortPreference);
       }
       
+      if (globalFilterPreference != null) {
+        await saveSelectedFilter(globalFilterPreference, "global");
+      }
+      
       // Keep selected forecast and commodity for better UX
       print('✅ Cache completely invalidated - next fetch will be from Firestore');
-      print('✅ Preserved sort preference: $sortPreference');
+      print('✅ Preserved sort/filter preferences for all forecast periods');
     } catch (e) {
       print('❌ Error invalidating cache: $e');
     }
@@ -185,6 +192,79 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
     try {
       final prefs = await SharedPreferences.getInstance();
       final sortValue = prefs.getString(_selectedSortKey);
+      return sortValue == "None" ? null : sortValue;
+    } catch (e) {
+      print('❌ Error getting selected sort from cache: $e');
+      return null;
+    }
+  }
+
+  // Save forecast start date
+  static Future<void> saveForecastStartDate(String forecastStartDate) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_forecastStartDateKey, forecastStartDate);
+      print('✅ Saved forecast start date to cache: $forecastStartDate');
+    } catch (e) {
+      print('❌ Error saving forecast start date to cache: $e');
+    }
+  }
+  
+  // Get forecast start date
+  static Future<String> getForecastStartDate() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final startDate = prefs.getString(_forecastStartDateKey) ?? "";
+      return startDate;
+    } catch (e) {
+      print('❌ Error getting forecast start date from cache: $e');
+      return "";
+    }
+  }
+
+  // Save selected filter option for specific forecast period
+  static Future<void> saveSelectedFilter(String? filter, String forecastPeriod) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${forecastPeriod}_selected_filter';
+      await prefs.setString(key, filter ?? "None");
+      print('✅ Saved selected filter to cache for $forecastPeriod: ${filter ?? "None"}');
+    } catch (e) {
+      print('❌ Error saving selected filter to cache: $e');
+    }
+  }
+  
+  // Get selected filter option for specific forecast period
+  static Future<String?> getSelectedFilter(String forecastPeriod) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${forecastPeriod}_selected_filter';
+      final filterValue = prefs.getString(key);
+      return filterValue == "None" ? null : filterValue;
+    } catch (e) {
+      print('❌ Error getting selected filter from cache: $e');
+      return null;
+    }
+  }
+
+  // Save selected sort option for specific forecast period
+  static Future<void> saveSelectedSortForForecast(String? sort, String forecastPeriod) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${forecastPeriod}_selected_sort';
+      await prefs.setString(key, sort ?? "None");
+      print('✅ Saved selected sort to cache for $forecastPeriod: ${sort ?? "None"}');
+    } catch (e) {
+      print('❌ Error saving selected sort to cache: $e');
+    }
+  }
+  
+  // Get selected sort option for specific forecast period
+  static Future<String?> getSelectedSortForForecast(String forecastPeriod) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = '${forecastPeriod}_selected_sort';
+      final sortValue = prefs.getString(key);
       return sortValue == "None" ? null : sortValue;
     } catch (e) {
       print('❌ Error getting selected sort from cache: $e');

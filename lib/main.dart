@@ -16,6 +16,7 @@ import 'services/firestore_service.dart';
 import 'utils/debug_helper.dart';
 import 'utils/data_cache.dart';
 import 'utils/forecast_cache_manager.dart';
+import 'utils/forecast_fix_helper.dart' as FixHelper; // Import for forecast fix helper
 import 'package:fl_chart/fl_chart.dart';
 
 void main() async {
@@ -46,6 +47,11 @@ class MyApp extends StatelessWidget {
 }
 
 class HomePage extends StatefulWidget {
+  final bool forceRefresh;
+  
+  // Constructor with optional forceRefresh parameter
+  const HomePage({Key? key, this.forceRefresh = false}) : super(key: key);
+  
   @override
   _HomePageState createState() => _HomePageState();
 }
@@ -71,12 +77,10 @@ class _HomePageState extends State<HomePage> {
   List<String> favoriteCommodities = [];
   List<String> displayedCommoditiesIds = []; // <-- Use IDs
   bool isHoldMode = false;
-  Set<String> heldCommodities = {};
-  String? deviceUUID;
+  Set<String> heldCommodities = {};  String? deviceUUID;
   String globalPriceDate = ""; // Store the latest global price date
-  bool _dataInitialized = false; // Track if data has been initialized
-  bool _fetchInProgress = false; // Track if a fetch operation is in progress
-  @override
+  String forecastStartDate = ""; // Store the forecast start date
+  bool _dataInitialized = false; // Track if data has been initialized@override
   void initState() {
     super.initState();
     _searchFocusNode.addListener(() {
@@ -89,7 +93,15 @@ class _HomePageState extends State<HomePage> {
     });
     _initializeUUID();
     _checkFirstLaunch();
-    loadCachedDataAndFetch();
+    
+    // Check if a forced refresh is requested
+    if (widget.forceRefresh) {
+      print("🔄 Force refresh requested from initState");
+      refreshDataFromFirestore();
+    } else {
+      loadCachedDataAndFetch();
+    }
+    
     loadDisplayedCommodities();
     loadFavorites();
     loadState();
@@ -134,6 +146,8 @@ class _HomePageState extends State<HomePage> {
       final cachedForecast = await DataCache.getSelectedForecast();
       final forecastPeriod = cachedForecast.isNotEmpty ? cachedForecast : "Now";
       
+      print("⚠️ DEBUG: Loading from cache for forecast period: $forecastPeriod");
+      
       // Load from forecast-specific cache for all periods including "Now"
       final forecastCache = await ForecastCacheManager.getCachedForecastData(forecastPeriod);
       if (forecastCache != null && forecastCache['commodities'] != null) {
@@ -143,19 +157,59 @@ class _HomePageState extends State<HomePage> {
         // Log forecast data to verify it's loaded correctly
         print("🔍 Loaded forecast commodities for $forecastPeriod: ${typedCommodities.length}");
         
+        // Debug log to check if forecasts have the correct period data
+        if (forecastPeriod != "Now") {
+          int forecastCount = 0;
+          int matchingPeriodCount = 0;
+          
+          for (var commodity in typedCommodities.take(3)) {
+            if (commodity['is_forecast'] == true) {
+              forecastCount++;
+              final period = commodity['forecast_period'] ?? 'Unknown';
+              if (period == forecastPeriod) {
+                matchingPeriodCount++;
+              }
+              print("⚠️ Sample forecast: ${commodity['id']} - Period: $period, Price: ${commodity['weekly_average_price']}");
+            }
+          }
+          
+          print("⚠️ DEBUG: Found $forecastCount forecasts, $matchingPeriodCount match $forecastPeriod period");
+        }
+        
         // Get filtered commodities from the cache
         final List<dynamic> tempFilteredCommodities = forecastCache['filteredCommodities'] ?? tempCommodities;
         final List<Map<String, dynamic>> typedFilteredCommodities = tempFilteredCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
         
-        // Update the UI
-        final cachedSort = await DataCache.getSelectedSort();
+        // Check if we need to load the forecast start date from the DataCache
+        String cachedForecastStartDate = "";
+        if (forecastPeriod != "Now") {
+          cachedForecastStartDate = await DataCache.getForecastStartDate();
+        }
+          // Always load global sort and filter settings
+        String? sortToUse = await DataCache.getSelectedSort();
+        String? filterToUse = await DataCache.getSelectedFilter("global");
+        
+        print("✅ Loaded global sort and filter settings: Sort=$sortToUse, Filter=$filterToUse");
+        
+        // Now set the state with the determined values
         setState(() {
           commodities = typedCommodities;
           filteredCommodities = typedFilteredCommodities;
           globalPriceDate = forecastCache['globalPriceDate'] ?? "";
+          forecastStartDate = forecastCache['forecastStartDate'] ?? cachedForecastStartDate;
           selectedForecast = forecastPeriod;
-          selectedSort = forecastCache['selectedSort'] ?? cachedSort;
+          selectedSort = sortToUse;
+          selectedFilter = filterToUse;
         });
+        
+        // Apply the sorting and filtering after the setState
+        if (selectedFilter != null) {
+          _applyFiltersOnly();
+        }
+        if (selectedSort != null) {
+          _applySorting();
+        }
+        
         print("✅ Successfully loaded forecast data from cache for $forecastPeriod");
         return true;
       }
@@ -208,7 +262,8 @@ class _HomePageState extends State<HomePage> {
     });
   }  // Store the last used forecast period to detect changes
   String _lastUsedForecast = "Now";
-    @override
+  
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
 
@@ -217,6 +272,7 @@ class _HomePageState extends State<HomePage> {
     // 2. When forecast period changes (_lastUsedForecast != selectedForecast)
     if (!_dataInitialized || _lastUsedForecast != selectedForecast) {
       print("🔄 Forecast changed from $_lastUsedForecast to $selectedForecast");
+      print("🧪 DEBUG: _dataInitialized=$_dataInitialized, cache will be checked");
       
       // Try to load from cache first if forecast period changed
       if (_lastUsedForecast != selectedForecast) {
@@ -224,39 +280,55 @@ class _HomePageState extends State<HomePage> {
           if (hasCachedForecast) {
             print("🔍 Found forecast data in cache for $selectedForecast, loading from cache");
             _loadFromCache().then((loadedFromCache) {
-              if (!loadedFromCache) {
-                // If cache loading failed, fetch from Firestore
-                print("❌ Failed to load from forecast cache, fetching from Firestore");
+              if (loadedFromCache) {
+                // Save the current forecast as the last used
+                _lastUsedForecast = selectedForecast;
+                print("✅ Successfully switched to $selectedForecast view from cache");
+                
+                // Debug log all forecast periods for currently selected commodity
+                if (selectedCommodityId != null) {
+                  print("🧪 DEBUG: Checking chart data for commodity $selectedCommodityId in $selectedForecast view");
+                  firestoreService.fetchWeeklyPrices(selectedCommodityId!).then((weeklyPrices) {
+                    final actualPrices = weeklyPrices.where((p) => p['is_forecast'] == false).toList();
+                    final forecastPrices = weeklyPrices.where((p) => p['is_forecast'] == true).toList();
+                    
+                    print("🧪 Found ${actualPrices.length} actual prices and ${forecastPrices.length} forecast prices");
+                    
+                    // Log forecast periods
+                    for (final forecast in forecastPrices) {
+                      final period = forecast['forecast_period'] ?? 'Unknown';
+                      final price = forecast['price'];
+                      final date = forecast['formatted_end_date'];
+                      print("🧪 Forecast: $period, Price: $price, Date: $date");
+                    }
+                  });
+                }
+              } else {                print("⚠️ Failed to load from cache for $selectedForecast, will fetch from Firestore");
                 fetchCommodities();
               }
             });
-          } else {
-            // No cache for this forecast period, fetch from Firestore
-            print("🔄 No forecast cache for $selectedForecast, fetching from Firestore");
+          } else {            print("⚠️ No cache found for $selectedForecast, will fetch from Firestore");
             fetchCommodities();
           }
-        });      } else {
-        // First load without a forecast change - still check cache first
-        print("🔄 First initialization - checking cache before fetching");
+        }).catchError((e) {          print("❌ Error checking forecast cache: $e");
+          fetchCommodities();
+        });
+      } else {
+        // First load, try cache first, then fetch
         _loadFromCache().then((loadedFromCache) {
-          if (!loadedFromCache) {
-            // If cache loading failed, fetch from Firestore
-            print("❌ No valid cache found on first load, fetching from Firestore");
+          if (!loadedFromCache) {            print("⚠️ No initial cache, fetching commodities");
             fetchCommodities();
           } else {
-            print("✅ Successfully loaded data from cache on first load");
+            print("✅ Loaded initial data from cache");
+            // Save the current forecast as the last used
+            _lastUsedForecast = selectedForecast;
           }
         });
       }
-      
-      _dataInitialized = true;
-      _lastUsedForecast = selectedForecast;
     } else {
-      // Just apply filter without fetching from Firestore
-      _applyFiltersOnly();
+      print("🔄 No forecast change detected, skipping fetch (still on $selectedForecast)");
     }
-  }
-  // Apply filters without fetching data from Firestore
+  }  // Apply filters without fetching data from Firestore
   void _applyFiltersOnly() {
     print("🔍 Applying filters to existing data without Firestore fetch");
     setState(() {
@@ -286,8 +358,11 @@ class _HomePageState extends State<HomePage> {
       // Cache the filtered result
       DataCache.saveFilteredCommodities(filteredCommodities);
     });
-  }
-    // Apply sorting to the filtered list
+      // Save the filter preference globally
+    DataCache.saveSelectedFilter(selectedFilter, "global").then((_) {
+      print("✅ Saved global filter preference: $selectedFilter");
+    });
+  }    // Apply sorting to the filtered list
   void _applySorting() {
     if (selectedSort == "Name") {
       filteredCommodities.sort((a, b) {
@@ -308,9 +383,10 @@ class _HomePageState extends State<HomePage> {
         return priceB.compareTo(priceA);
       });
     }
-    
-    // Cache the sort preference
-    DataCache.saveSelectedSort(selectedSort);
+      // Cache the sort preference globally
+    DataCache.saveSelectedSort(selectedSort).then((_) {
+      print("✅ Saved global sort preference: $selectedSort");
+    });
   }// Fetch commodities from Firestore
   Future<void> fetchCommodities() async {
     try {
@@ -320,11 +396,39 @@ class _HomePageState extends State<HomePage> {
       final globalDateInfo = await firestoreService.fetchLatestGlobalPriceDate();
       final String formattedGlobalDate = globalDateInfo['formattedDate'] ?? "";
       globalPriceDate = formattedGlobalDate; // Store for use in UI
-      
-      // STEP 2: Get all the latest prices in a single batch for all commodities
+        // STEP 2: Get all the latest prices in a single batch for all commodities
       print("🔄 Fetching all latest prices in one batch...");
       final allLatestPrices = await firestoreService.fetchAllLatestPrices(forecastPeriod: selectedForecast);
       print("✅ Fetched latest prices for ${allLatestPrices.length} commodities (Forecast: $selectedForecast)");
+        // For forecast views, determine the forecast start date
+      if (selectedForecast != "Now") {
+        // Look for the earliest forecast entry date for the selected period
+        Timestamp? earliestForecastDate;
+        
+        allLatestPrices.forEach((commodityId, priceData) {
+          // For "Next Week" view, only look at Next Week forecasts
+          // For "Two Weeks" view, prefer Next Week forecasts as the starting point
+          if (priceData['is_forecast'] == true && 
+             (priceData['forecast_period'] == selectedForecast || 
+              (selectedForecast == "Two Weeks" && priceData['forecast_period'] == "Next Week"))) {
+            final currentStartDate = priceData['start_date'] as Timestamp?;
+            if (currentStartDate != null) {
+              if (earliestForecastDate == null || currentStartDate.compareTo(earliestForecastDate!) < 0) {
+                earliestForecastDate = currentStartDate;
+              }
+            }
+          }
+        });
+        
+        // Format the forecast start date if we found one
+        if (earliestForecastDate != null) {
+          final date = earliestForecastDate!.toDate();
+          forecastStartDate = "${date.month}/${date.day}/${date.year}";
+          print("📅 Forecast start date: $forecastStartDate");
+        } else {
+          forecastStartDate = "";
+        }
+      }
       
       // Fetch all commodity documents from Firestore
       final querySnapshot = await _firestore.collection('commodities').get();
@@ -421,18 +525,23 @@ class _HomePageState extends State<HomePage> {
         }
       });
       
-    // Cache data after successful fetch
-      await DataCache.saveCommodities(commodities);
+    // Cache data after successful fetch      await DataCache.saveCommodities(commodities);
       await DataCache.saveFilteredCommodities(filteredCommodities);
       await DataCache.saveSelectedForecast(selectedForecast);
       await DataCache.saveGlobalPriceDate(globalPriceDate);
-      print("✅ Saved commodity data to cache");
-        // Save forecast data to specific forecast cache for all periods (including "Now")
+      
+      // Save forecast start date if applicable
+      if (selectedForecast != "Now" && forecastStartDate.isNotEmpty) {
+        await DataCache.saveForecastStartDate(forecastStartDate);
+      }
+      
+      print("✅ Saved commodity data to cache");      // Save forecast data to specific forecast cache for all periods (including "Now")
+      // But don't include sort/filter settings since they're now global
       final forecastData = {
         'commodities': commodities,
         'filteredCommodities': filteredCommodities,
         'globalPriceDate': globalPriceDate,
-        'selectedSort': selectedSort,
+        'forecastStartDate': forecastStartDate,
       };
       
       await ForecastCacheManager.saveForecastData(selectedForecast, forecastData);
@@ -490,31 +599,39 @@ class _HomePageState extends State<HomePage> {
       }
     });
     print("Favorites loaded: $favoriteCommodities");
-  }
-  Future<void> saveState() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('selectedFilter', selectedFilter ?? "None");
-    
-    // Save sort using the DataCache method instead
+  }  Future<void> saveState() async {
+  // Save filter and sort globally (not forecast-specific)
+    await DataCache.saveSelectedFilter(selectedFilter, "global");
     await DataCache.saveSelectedSort(selectedSort);
     
-    print("State saved: Filter = $selectedFilter, Sort = $selectedSort");
+    print("State saved globally: Filter = $selectedFilter, Sort = $selectedSort");
   }  Future<void> loadState() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      // Load filter globally
+      final filterValue = await DataCache.getSelectedFilter("global");
       
-      // Load filter from SharedPreferences (keeping compatibility with old implementation)
-      final filterValue = prefs.getString('selectedFilter');
+      // For backwards compatibility, if no global filter is found,
+      // try the old style filter setting
+      String? finalFilterValue = filterValue;
+      if (finalFilterValue == null) {
+        final prefs = await SharedPreferences.getInstance();
+        final legacyFilter = prefs.getString('selectedFilter');
+        finalFilterValue = legacyFilter == "None" ? null : legacyFilter;
+        
+        // If we found a legacy filter, migrate it to the new global system
+        if (finalFilterValue != null) {
+          await DataCache.saveSelectedFilter(finalFilterValue, "global");
+          print("✅ Migrated legacy filter setting to global filter system");
+        }
+      }
       
-      // Load sort from DataCache (new implementation)
+      // Load sort from DataCache
       final sortValue = await DataCache.getSelectedSort();
       
       setState(() {
-        selectedFilter = filterValue == "None" ? null : filterValue;
+        selectedFilter = finalFilterValue;
         selectedSort = sortValue;
-      });
-
-      print("State loaded: Filter = $selectedFilter, Sort = $selectedSort");
+      });      print("State loaded globally: Filter = $selectedFilter, Sort = $selectedSort");
       
       // Apply the loaded filter and sort
       _applyFiltersOnly();
@@ -552,11 +669,11 @@ class _HomePageState extends State<HomePage> {
                   });
                 },
               ),
-              actions: [
-                TextButton(
-                  onPressed: () async {
+              actions: [                TextButton(
+                  onPressed: () {
                     Navigator.pop(context);
-                    await fetchCommodities(); // Reload the list
+                    // Apply filters to update the UI with new favorites
+                    _applyFiltersOnly();
                     setState(() {}); // Force UI update
                   },
                   child: Text("Done"),
@@ -598,14 +715,16 @@ class _HomePageState extends State<HomePage> {
                   });
                 },
               ),
-              actions: [
-                TextButton(
+              actions: [                TextButton(
                   onPressed: () async {
                     setState(() {
                       displayedCommoditiesIds = List.from(tempSelectedItems); // Save changes to the main list
                     });
                     await saveDisplayedCommodities(); // Persist changes
-                    await fetchCommodities(); // Reload the main list
+                    
+                    // Apply filters to reflect changes without fetching from Firestore
+                    _applyFiltersOnly();
+                    
                     Navigator.pop(context); // Close the dialog
                   },
                   child: Text("Done"),
@@ -735,57 +854,41 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
               )
-            else              Row(
-                children: [
-                  // Refresh button
-                  IconButton(
-                    icon: Icon(Icons.refresh, color: kBlue),
-                    onPressed: refreshDataFromFirestore,
-                    tooltip: 'Refresh data',
-                  ),
-                  // Force refresh button - always fetch from Firestore regardless of cache
-                  IconButton(
-                    icon: Icon(Icons.update, color: kBlue),
-                    onPressed: () {
-                      // Clear the forecast cache for the current period first
-                      ForecastCacheManager.invalidateForecastCache(selectedForecast).then((_) {
-                        // Then fetch from Firestore
-                        print("🔄 Forced refresh requested. Cache cleared for $selectedForecast");
-                        fetchCommodities();
-                      });
-                    },
-                    tooltip: 'Force refresh from Firestore',
-                  ),
-                  // Search button
-                  IconButton(
-                    icon: Icon(Icons.search, color: kBlue),
-                    onPressed: () {
-                      setState(() {
-                        isSearching = true; // Activate the search bar
-                      });
-                      _searchFocusNode.requestFocus(); // Automatically focus the search bar
-                    },
-                  ),
-                ],
+            else
+              // Search button only (no refresh buttons)
+              IconButton(
+                icon: Icon(Icons.search, color: kBlue),
+                onPressed: () {
+                  setState(() {
+                    isSearching = true; // Activate the search bar
+                  });
+                  _searchFocusNode.requestFocus(); // Automatically focus the search bar
+                },
               ),
           ],        ),
         body: Stack(
           children: [
-            Column(
-              children: [              // Global date display - left aligned
+            Column(              children: [              // Global date display - centered
                 Container(
                   width: double.infinity,
                   color: Colors.white,
-                  padding: EdgeInsets.only(left: 16, top: 8, bottom: 8),
-                  alignment: Alignment.centerLeft,
-                  child: Text(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  alignment: Alignment.center,                  child: Text(
                     globalPriceDate.isEmpty 
                         ? "Updating price data..." 
-                        : "Latest price watch data: $globalPriceDate",
+                        : selectedForecast == "Now"
+                            ? "Latest price watch data: $globalPriceDate"
+                            : selectedForecast == "Next Week"
+                                ? forecastStartDate.isEmpty
+                                    ? "Forecast Prices for Next Week"
+                                    : "Forecast Prices for Next Week (Starting $forecastStartDate)"
+                                : forecastStartDate.isEmpty
+                                    ? "Forecast Prices for Two Weeks"
+                                    : "Forecast Prices for Two Weeks (Starting $forecastStartDate)",
                     style: TextStyle(
                       color: kBlue,
                       fontSize: 12,
-                      fontWeight: FontWeight.w400,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ),
@@ -804,24 +907,15 @@ class _HomePageState extends State<HomePage> {
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,                    children: [                      Container(
-                        height: 200, // Return to more rectangular dimensions
-                        width: MediaQuery.of(context).size.width * 0.95, // Use almost the full width
+                        height: 230, // Return to more rectangular dimensions
+                        width: MediaQuery.of(context).size.width * 0.9, // Use almost the full width
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
                             colors: [Colors.white, const Color(0xFFF8F8FF)],
                           ),
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black12,
-                              blurRadius: 8,
-                              spreadRadius: 1,
-                              offset: Offset(0, 3),
-                            ),
-                          ],
-                          border: Border.all(color: Colors.grey.shade200, width: 1.5),
+                    
                         ),
                         child: selectedCommodityId == null
                             ? Center(child: Text("Select a commodity to see price graph"))
@@ -879,22 +973,16 @@ class _HomePageState extends State<HomePage> {
                                         ),
                                       ],
                                     );
-                                  }
-
-                                  // Sort by end_date to find the most recent price
+                                  }                                  // Sort by end_date to find the most recent price
                                   actualPrices.sort((a, b) {
                                     final aDate = a['end_date'] as Timestamp;
                                     final bDate = b['end_date'] as Timestamp;
                                     return bDate.compareTo(aDate); // Sort descending (most recent first)
                                   });
                                   
-                                  // Get the most recent date and price
-                                  final latestPrice = actualPrices.first; // First item after descending sort
-                                  final price = latestPrice['price'] ?? 0.0;
-                                  final formattedDate = latestPrice['formatted_end_date'] ?? "-";                                  // Prepare the display prices based on selected forecast view
+                                  // Prepare the display prices based on selected forecast view
                                   List<Map<String, dynamic>> displayPrices = [];
-                                  
-                                  if (selectedForecast == "Now") {
+                                    if (selectedForecast == "Now") {
                                     // For "Now", show past two weeks of actual prices
                                     // Sort all actual prices by date (ascending)
                                     actualPrices.sort((a, b) {
@@ -910,69 +998,153 @@ class _HomePageState extends State<HomePage> {
                                     } else {
                                       displayPrices = List.from(actualPrices);
                                     }
-                                  } else if (selectedForecast == "Next Week") {
-                                    // For "Next Week", show current price and one-week forecast only
+                                    
+                                    print("📈 NOW view: Showing ${displayPrices.length} actual prices");                                  } else if (selectedForecast == "Next Week") {
+                                    // For "Next Week", we need to show ONLY latest non-forecast price TO the one-week forecast
                                     displayPrices = [];
                                     
                                     // Add the most recent actual price
                                     if (actualPrices.isNotEmpty) {
                                       displayPrices.add(actualPrices.first); // Already sorted to have most recent first
+                                    }                                    
+                                    
+                                    // Find forecasts for the Next Week period
+                                    final allForecasts = snapshot.data!.where((p) => p['is_forecast'] == true).toList();
+                                    
+                                    // Debug log all forecasts for this commodity
+                                    print("\n🔎 DEBUG - All forecasts for commodity ${selectedCommodityId}:");
+                                    for (var f in allForecasts) {
+                                      print("  - Date: ${f['formatted_end_date']}, Period: ${f['forecast_period'] ?? 'MISSING'}, Price: ${f['price']}");
                                     }
                                     
-                                    // Add one-week forecast
-                                    final oneWeekForecasts = snapshot.data!
-                                        .where((p) => p['is_forecast'] == true)
-                                        .toList();
-                                        
-                                    // Filter to get only "Next Week" forecasts
-                                    final nextWeekForecasts = oneWeekForecasts.where((p) {
-                                      // Check if forecast is for next week based on date
-                                      if (p['end_date'] != null) {
-                                        final forecastDate = (p['end_date'] as Timestamp).toDate();
-                                        final today = DateTime.now();
-                                        final daysDifference = forecastDate.difference(today).inDays;
-                                        return daysDifference <= 7; // Within a week
+                                    // Check if any forecast periods are missing
+                                    bool needsForecastPeriodFix = false;
+                                    for (var f in allForecasts) {
+                                      if (f['forecast_period'] == null || f['forecast_period'].toString().isEmpty) {
+                                        needsForecastPeriodFix = true;
+                                        print("⚠️ Found forecast with missing period: ${f['formatted_end_date']}, Price: ${f['price']}");
                                       }
-                                      return false;
-                                    }).toList();
+                                    }
+                                    
+                                    List<Map<String, dynamic>> nextWeekForecasts = [];
+                                    
+                                    // Fix missing forecast periods if needed
+                                    if (needsForecastPeriodFix) {
+                                      print("🔧 Fixing missing forecast periods for commodity ${selectedCommodityId}");
+                                        // Use the forecast helper to fix periods
+                                      final fixedData = FixHelper.ForecastDebugHelper.ensureForecastPeriodsExist(snapshot.data!);
+                                      
+                                      // Get the fixed forecasts
+                                      final fixedForecasts = fixedData.where((p) => p['is_forecast'] == true).toList();
+                                      
+                                      // Get Next Week forecasts
+                                      nextWeekForecasts = fixedForecasts.where((p) => 
+                                          p['forecast_period'] == "Next Week").toList();
+                                      
+                                      print("📊 After fix: Found ${nextWeekForecasts.length} 'Next Week' forecasts");
+                                    } else {
+                                      // If no fix needed, get forecasts normally
+                                      nextWeekForecasts = allForecasts.where((p) => 
+                                          p['forecast_period'] == "Next Week").toList();
+                                    }
                                     
                                     if (nextWeekForecasts.isNotEmpty) {
-                                      // Sort forecasts by date
+                                      // Sort by date (ascending)
                                       nextWeekForecasts.sort((a, b) {
                                         final aDate = a['end_date'] as Timestamp;
                                         final bDate = b['end_date'] as Timestamp;
                                         return aDate.compareTo(bDate);
                                       });
                                       
-                                      // Add first next week forecast
+                                      // Add the Next Week forecast to the display
                                       displayPrices.add(nextWeekForecasts.first);
+                                      
+                                      print("📈 NEXT WEEK view: Added forecast price: ${nextWeekForecasts.first['price']} for ${nextWeekForecasts.first['formatted_end_date']}");
+                                    } else {
+                                      print("⚠️ No 'Next Week' forecasts found for this commodity");
                                     }
+                                    
+                                    print("📈 NEXT WEEK view: Showing ${displayPrices.length} prices (actual + Next Week forecast)");
                                   } else {
-                                    // For "Two Weeks", show current + one-week + two-weeks forecasts
+                                    // For "Two Weeks", we need to show latest -> Next Week -> Two Weeks (all three points)
                                     displayPrices = [];
                                     
                                     // Add the most recent actual price
                                     if (actualPrices.isNotEmpty) {
                                       displayPrices.add(actualPrices.first);
+                                      print("📈 TWO WEEKS view: Added latest actual price: ${actualPrices.first['price']} for ${actualPrices.first['formatted_end_date']}");
                                     }
                                     
-                                    // Add all forecast prices
-                                    final forecastPrices = snapshot.data!
-                                        .where((p) => p['is_forecast'] == true)
-                                        .toList();
+                                    // Get all forecast prices
+                                    final allForecasts = snapshot.data!.where((p) => p['is_forecast'] == true).toList();
                                     
-                                    // Sort forecasts by date
-                                    forecastPrices.sort((a, b) {
-                                      final aDate = a['end_date'] as Timestamp;
-                                      final bDate = b['end_date'] as Timestamp;
-                                      return aDate.compareTo(bDate);
-                                    });
+                                    // Check if any forecast periods are missing and fix them if needed
+                                    bool needsForecastPeriodFix = false;
+                                    for (var f in allForecasts) {
+                                      final period = f['forecast_period'];
+                                      if (period == null || period.toString().isEmpty) {
+                                        needsForecastPeriodFix = true;
+                                        print("⚠️ Found forecast with missing period: ${f['formatted_end_date']}, Price: ${f['price']}");
+                                      }
+                                    }
                                     
-                                    // Add forecasts (limit to 2 to show one-week and two-weeks)
-                                    if (forecastPrices.isNotEmpty) {
-                                      for (int i = 0; i < (forecastPrices.length > 2 ? 2 : forecastPrices.length); i++) {
-                                        displayPrices.add(forecastPrices[i]);
-                                      }                                    }
+                                    List<Map<String, dynamic>> fixedData = snapshot.data!;
+                                    List<Map<String, dynamic>> nextWeekForecasts = [];
+                                    List<Map<String, dynamic>> twoWeeksForecasts = [];
+                                    
+                                    // Fix forecast periods if needed
+                                    if (needsForecastPeriodFix) {                                      print("🔧 Fixing missing forecast periods for commodity ${selectedCommodityId}");
+                                      fixedData = FixHelper.ForecastDebugHelper.ensureForecastPeriodsExist(snapshot.data!);
+                                      
+                                      // Get fixed forecasts
+                                      final fixedForecasts = fixedData.where((p) => p['is_forecast'] == true).toList();
+                                      
+                                      // Get Next Week and Two Weeks forecasts
+                                      nextWeekForecasts = fixedForecasts.where((p) => 
+                                          p['forecast_period'] == "Next Week").toList();
+                                      
+                                      twoWeeksForecasts = fixedForecasts.where((p) => 
+                                          p['forecast_period'] == "Two Weeks").toList();
+                                      
+                                      print("📊 After fix: Found ${nextWeekForecasts.length} Next Week and ${twoWeeksForecasts.length} Two Weeks forecasts");
+                                    } else {
+                                      // If no fix needed, get forecasts normally
+                                      nextWeekForecasts = allForecasts.where((p) => 
+                                          p['forecast_period'] == "Next Week").toList();
+                                      
+                                      twoWeeksForecasts = allForecasts.where((p) => 
+                                          p['forecast_period'] == "Two Weeks").toList();
+                                    }
+                                    
+                                    // First add Next Week forecast if available
+                                    if (nextWeekForecasts.isNotEmpty) {
+                                      // Sort by date (ascending)
+                                      nextWeekForecasts.sort((a, b) {
+                                        final aDate = a['end_date'] as Timestamp;
+                                        final bDate = b['end_date'] as Timestamp;
+                                        return aDate.compareTo(bDate);
+                                      });
+                                      
+                                      // Add the Next Week forecast
+                                      displayPrices.add(nextWeekForecasts.first);
+                                      print("📈 TWO WEEKS view: Added Next Week forecast: ${nextWeekForecasts.first['price']} for ${nextWeekForecasts.first['formatted_end_date']}");
+                                    }
+                                    
+                                    // Then add Two Weeks forecast if available
+                                    if (twoWeeksForecasts.isNotEmpty) {
+                                      // Sort by date (ascending)
+                                      twoWeeksForecasts.sort((a, b) {
+                                        final aDate = a['end_date'] as Timestamp;
+                                        final bDate = b['end_date'] as Timestamp;
+                                        return aDate.compareTo(bDate);
+                                      });
+                                      
+                                      // Add the Two Weeks forecast
+                                      displayPrices.add(twoWeeksForecasts.first);
+                                      print("📈 TWO WEEKS view: Added Two Weeks forecast: ${twoWeeksForecasts.first['price']} for ${twoWeeksForecasts.first['formatted_end_date']}");
+                                    }
+                                    
+                                    print("📈 TWO WEEKS view: Showing ${displayPrices.length} points (actual + Next Week + Two Weeks)");
                                   }
 
                                   // Create chart spots
@@ -981,31 +1153,7 @@ class _HomePageState extends State<HomePage> {
                                     final price = double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0;
                                     spots.add(FlSpot(i.toDouble(), price));
                                   }                                  return Column(
-                                    children: [                                      // Add "As of" date above the chart with nicer styling
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                                        margin: const EdgeInsets.only(bottom: 8),
-                                        decoration: BoxDecoration(
-                                          color: kBlue.withOpacity(0.07),
-                                          borderRadius: BorderRadius.circular(20),
-                                          border: Border.all(color: kBlue.withOpacity(0.2), width: 0.8),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min, // Compact size for centered row
-                                          children: [
-                                            Icon(Icons.calendar_today, size: 12, color: kBlue.withOpacity(0.7)),
-                                            SizedBox(width: 4),
-                                            Text(
-                                              "As of: $formattedDate",
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                color: kBlue.withOpacity(0.9),
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
+                                    children: [
                                       Expanded(
                                         child: LineChart(                                          LineChartData(
                                             lineBarsData: [
@@ -1081,17 +1229,28 @@ class _HomePageState extends State<HomePage> {
                                                   getTitlesWidget: (value, meta) {
                                                     int idx = value.toInt();
                                                     if (idx < 0 || idx >= displayPrices.length) return Container();
-                                                    
-                                                    // Get date from timestamp
+                                                      // Get date from timestamp
                                                     final endDate = displayPrices[idx]['end_date'] as Timestamp;
                                                     final date = endDate.toDate();
                                                     
                                                     // Different format if it's a forecast
                                                     final isForecast = displayPrices[idx]['is_forecast'] == true;
-                                                    final dateText = "${date.month}/${date.day}";
+                                                    final forecastPeriod = displayPrices[idx]['forecast_period'] ?? '';                                                    // Create date text with indicator for what type of point it is
+                                                    String dateText = "${date.month}/${date.day}";
+                                                    if (selectedForecast != "Now") {
+                                                      // For forecast views, add labels to identify points
+                                                      if (idx == 0) {
+                                                        dateText = "Latest";
+                                                      } else if (forecastPeriod == "Next Week") {
+                                                        // Use Week 1 for the Two Weeks view to prevent overflow
+                                                        dateText = selectedForecast == "Two Weeks" ? "Week 1" : "Next\nWeek";
+                                                      } else if (forecastPeriod == "Two Weeks") {
+                                                        dateText = "Week 2";
+                                                      }
+                                                    }
                                                     
-                                                    // Only show every other date if more than 3 dates
-                                                    if (displayPrices.length > 3 && idx % 2 != 0 && idx != displayPrices.length - 1) {
+                                                    // Only show every other date if more than 3 dates and in "Now" view
+                                                    if (selectedForecast == "Now" && displayPrices.length > 3 && idx % 2 != 0 && idx != displayPrices.length - 1) {
                                                       return Container(); // Skip every other date
                                                     }
                                                       return Padding(
@@ -1167,8 +1326,23 @@ class _HomePageState extends State<HomePage> {
                                                     final date = timestamp.toDate();
                                                     final dateText = "${date.month}/${date.day}/${date.year}";
                                                     
+                                                    String forecastType = "";
+                                                    String daysDifference = "";
+                                                    
+                                                    if (isForecast && displayPrices.length > 1 && idx > 0) {
+                                                      // Determine which forecast period this is
+                                                      forecastType = displayPrices[idx]['forecast_period'] ?? 'Forecast';
+                                                      
+                                                      // Calculate days difference between latest price and forecast
+                                                      if (displayPrices[0]['end_date'] != null) {
+                                                        final latestDate = (displayPrices[0]['end_date'] as Timestamp).toDate();
+                                                        final difference = date.difference(latestDate).inDays;
+                                                        daysDifference = " ($difference days from latest)";
+                                                      }
+                                                    }
+                                                    
                                                     return LineTooltipItem(
-                                                      "${isForecast ? '(Forecast) ' : ''}₱${price.toStringAsFixed(2)}\n$dateText",
+                                                      "${isForecast ? '($forecastType)' : 'Latest'} ₱${price.toStringAsFixed(2)}\n$dateText${daysDifference}",
                                                       TextStyle(
                                                         color: isForecast ? kPink : kBlue,
                                                         fontWeight: FontWeight.bold,
@@ -1193,16 +1367,88 @@ class _HomePageState extends State<HomePage> {
                                               offset: Offset(0, 1),
                                             ),
                                           ],
-                                        ),
-                                        margin: const EdgeInsets.only(top: 8.0),                                        child: Column(
+                                        ),                                        margin: const EdgeInsets.only(top: 8.0),
+                                        child: Column(
                                           children: [                                            Text(
-                                              "${selectedForecast == 'Now' ? 'Latest price' : selectedForecast + ' price'}: ₱${price is double ? price.toStringAsFixed(2) : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2)}",
+                                              "Price Trend",
                                               style: TextStyle(
-                                                fontSize: 16,
+                                                fontSize: 13,
                                                 color: kBlue,
                                                 fontWeight: FontWeight.bold,
                                               ),
-                                            ),
+                                            ),                                            // Add specific price values when in forecast modes
+                                            if (selectedForecast != "Now" && displayPrices.length > 1)
+                                              Padding(
+                                                padding: const EdgeInsets.only(top: 5.0),
+                                                child: Row(
+                                                  mainAxisAlignment: MainAxisAlignment.center,
+                                                  children: [
+                                                    // For Two Weeks view, only show Latest and Two Weeks forecasts
+                                                    if (selectedForecast == "Two Weeks")
+                                                      for (int i = 0; i < displayPrices.length; i++)
+                                                        if (i == 0 || displayPrices[i]['forecast_period'] == "Two Weeks")
+                                                          Padding(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 5.0),
+                                                            child: Row(
+                                                              mainAxisSize: MainAxisSize.min,
+                                                              children: [
+                                                                Container(
+                                                                  width: 8,
+                                                                  height: 8,
+                                                                  decoration: BoxDecoration(
+                                                                    shape: BoxShape.circle,
+                                                                    color: displayPrices[i]['is_forecast'] == true ? kPink : kBlue,
+                                                                  ),
+                                                                ),
+                                                                SizedBox(width: 3),
+                                                                Text(
+                                                                  i == 0 
+                                                                    ? "Latest: ₱${(double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0).toStringAsFixed(2)}"
+                                                                    : displayPrices[i]['forecast_period'] == "Two Weeks"
+                                                                      ? "Two Weeks: ₱${(double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0).toStringAsFixed(2)}"
+                                                                      : "${displayPrices[i]['forecast_period'] ?? 'Forecast'}: ₱${(double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0).toStringAsFixed(2)}",
+                                                                  style: TextStyle(
+                                                                    fontSize: 12,
+                                                                    color: displayPrices[i]['is_forecast'] == true ? kPink : kBlue,
+                                                                    fontWeight: FontWeight.w500,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                    // For other views, show all forecast points
+                                                    if (selectedForecast != "Two Weeks")
+                                                      for (int i = 0; i < displayPrices.length; i++)
+                                                        Padding(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 5.0),
+                                                          child: Row(
+                                                            mainAxisSize: MainAxisSize.min,
+                                                            children: [
+                                                              Container(
+                                                                width: 8,
+                                                                height: 8,
+                                                                decoration: BoxDecoration(
+                                                                  shape: BoxShape.circle,
+                                                                  color: displayPrices[i]['is_forecast'] == true ? kPink : kBlue,
+                                                                ),
+                                                              ),
+                                                              SizedBox(width: 3),
+                                                              Text(
+                                                                i == 0 
+                                                                  ? "Latest: ₱${(double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0).toStringAsFixed(2)}"
+                                                                  : "${displayPrices[i]['forecast_period'] ?? 'Forecast'}: ₱${(double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0).toStringAsFixed(2)}",
+                                                                style: TextStyle(
+                                                                  fontSize: 12,
+                                                                  color: displayPrices[i]['is_forecast'] == true ? kPink : kBlue,
+                                                                  fontWeight: FontWeight.w500,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                  ],
+                                                ),
+                                              ),
                                           ],
                                         ),
                                       ),
@@ -1516,13 +1762,14 @@ class _HomePageState extends State<HomePage> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
-          ),
-          onPressed: () async {
+          ),          onPressed: () async {
             if (selectedForecast != text) {
               setState(() {
                 selectedForecast = text;
                 // Clear selected commodity when forecast changes
                 selectedCommodityId = null;
+                // Note: selectedFilter and selectedSort remain unchanged
+                // since they're now global settings
               });
               
               // Save selected forecast to cache immediately
@@ -1576,8 +1823,7 @@ class _HomePageState extends State<HomePage> {
               ),            ),
           ),
         ),
-      ),
-    );
+      ));
   }
   Widget _buildCommodityItem(Map<String, dynamic> commodity, {required bool isSelected, required bool isHeld, required int index}) {
     final String commodityId = commodity['id'].toString();
@@ -1588,26 +1834,43 @@ class _HomePageState extends State<HomePage> {
     final String unit = display['unit'] ?? "kg";
     final String specification = display["specification"] ?? "-";
     final String category = display["category"] ?? "-";
-
-    // Get the price (handle different formats)
+    
+    // Get the price and date
     final price = commodity['weekly_average_price'];
-    final formattedPrice = (price is double) 
-        ? price.toStringAsFixed(2) 
-        : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2);
+    final priceDate = commodity['price_date'] ?? '';
+    final isForecast = commodity['is_forecast'] ?? false;
+    
+    // Handle empty price display
+    final bool hasPriceData = price != null && price.toString().isNotEmpty && price != 0.0;
+    final String formattedPrice = !hasPriceData 
+        ? "-" 
+        : (price is double) 
+            ? price.toStringAsFixed(2) 
+            : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2);
+            
+    // Check for last historical price (for "Now" view with no latest price)
+    final hasHistoricalPrice = selectedForecast == "Now" && !hasPriceData && 
+                          commodity['last_historical_price'] != null &&
+                          commodity['last_historical_price'].toString().isNotEmpty &&
+                          commodity['last_historical_price'] != 0.0;
+                          
+    final String historicalPrice = hasHistoricalPrice
+      ? (commodity['last_historical_price'] is double)
+          ? commodity['last_historical_price'].toStringAsFixed(2)
+          : (double.tryParse(commodity['last_historical_price'].toString()) ?? 0.0).toStringAsFixed(2)
+      : "-";
+      
+    final String historicalDate = commodity['last_historical_date'] ?? '';
+
+    // Track if we should show "As of" date
+    final bool showAsOfDate = (selectedForecast == "Now" && !isForecast && priceDate.isNotEmpty) || 
+                         (selectedForecast == "Now" && !hasPriceData && hasHistoricalPrice);
 
     // Alternate background color based on index
     final backgroundColor = index % 2 == 0 ? Colors.white : kAltGray;
-
-    // Determine if we should show the category text
+    
     // Hide category when user filtered by a specific category (not "None" or "Favorites")
     final bool showCategory = selectedFilter == null || selectedFilter == "Favorites";
-
-    // Get forecast period for display
-    final bool isForecast = commodity['is_forecast'] == true;
-    final String forecastPeriod = commodity['forecast_period'] ?? "";
-    final String forecastText = isForecast 
-        ? (forecastPeriod.isNotEmpty ? "(Forecast - $forecastPeriod)" : "(Forecast)")
-        : "";
 
     return AnimatedContainer(
       duration: Duration(milliseconds: 200),
@@ -1639,84 +1902,114 @@ class _HomePageState extends State<HomePage> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Display the commodity image
+            // Commodity image (re-added)
             CircleAvatar(
-              radius: 24,
               backgroundImage: AssetImage(
                 'assets/commodity_images/${getCommodityImage(commodityId)}',
               ),
+              radius: 24,
             ),
-            SizedBox(width: 16),
+            SizedBox(width: 12),
+            // Commodity details (left side)
             Expanded(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Commodity name with unit
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          displayName,
-                          style: TextStyle(fontWeight: FontWeight.w300, fontSize: 20),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      SizedBox(width: 4),
-                      Text(
-                        "($unit)",
-                        style: TextStyle(
-                          fontWeight: FontWeight.w300,
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 4),
-                  // Display specification (and category if not filtered by category)
                   Text(
-                    showCategory ? "$category · $specification" : specification,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w300,
-                      fontSize: 12,
-                      color: Colors.grey,
-                    ),
+                    displayName,
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  SizedBox(height: 4),
+                  Text(
+                    specification,
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (showCategory) ...[
+                    SizedBox(height: 4),
+                    Text(
+                      category,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.grey,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ],
               ),
             ),
             SizedBox(width: 5),
-            // Price and date
+            // Price and date (right side)
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  "₱$formattedPrice",
-                  style: TextStyle(fontWeight: FontWeight.w500, fontSize: 20),
-                ),
-                // Always show date for non-global date prices to ensure context for older prices
-                if (commodity['price_date'] != null && 
-                    commodity['price_date'].toString().isNotEmpty && 
-                    commodity['is_global_date'] == false)
-                  Text(
-                    "as of: ${commodity['price_date']}",
-                    style: TextStyle(
-                      fontWeight: FontWeight.w300,
-                      fontSize: 12,
-                      color: kBlue,
-                    ),
+                  hasPriceData 
+                    ? "₱$formattedPrice" 
+                    : (hasHistoricalPrice && selectedForecast == "Now") 
+                      ? "₱$historicalPrice" 
+                      : "₱-",
+                  style: TextStyle(
+                    fontWeight: (hasPriceData || (hasHistoricalPrice && selectedForecast == "Now")) ? FontWeight.w500 : FontWeight.normal, 
+                    fontSize: 20,
+                    color: (hasPriceData || (hasHistoricalPrice && selectedForecast == "Now")) ? null : Colors.grey
                   ),
-                // Show forecast indicator with specific forecast period
-                if (isForecast)
+                ),
+                // Show data status
+                if (!hasPriceData && !hasHistoricalPrice)
+                  Container(
+                    margin: EdgeInsets.only(top: 4),
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.withOpacity(0.3), width: 1),
+                    ),
+                    child: Text(
+                      selectedForecast != "Now" ? "Insufficient data" : "No data",
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 11,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  )
+                // Show forecast indicator or date
+                else if (isForecast)
+                  Container(
+                    margin: EdgeInsets.only(top: 4),
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: kPink.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: kPink.withOpacity(0.3), width: 1),
+                    ),
+                    child: Text(
+                      "Forecast",
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 11,
+                        color: kPink,
+                      ),
+                    ),
+                  )
+                // Show date for actual prices or historical prices in "Now" view
+                else if (selectedForecast == "Now")
                   Text(
-                    forecastText,
+                    hasPriceData && priceDate.isNotEmpty
+                      ? "As of $priceDate"
+                      : hasHistoricalPrice && historicalDate.isNotEmpty
+                        ? "As of $historicalDate"
+                        : "",
                     style: TextStyle(
-                      fontWeight: FontWeight.w300,
-                      fontSize: 12,
-                      color: Colors.orange,
+                      fontSize: 11,
+                      color: Colors.grey,
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
               ],
@@ -1765,7 +2058,7 @@ class _HomePageState extends State<HomePage> {
     Future.microtask(() => DataCache.saveFilteredCommodities(result));
     
     return result;
-  }
+   }
   
   // Helper function to apply the current sort to any list
   void _applySortToList(List<Map<String, dynamic>> listToSort) {
@@ -1823,13 +2116,10 @@ class _HomePageState extends State<HomePage> {
           // Check/Uncheck All buttons
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              TextButton(
-                onPressed: () async {
-                  final querySnapshot = await _firestore.collection('commodities').get();
-                  final allCommodities = querySnapshot.docs
-                    .map((doc) => doc.id)
-                    .toList();
+            children: [              TextButton(
+                onPressed: () {
+                  // Use cached commodities instead of fetching from Firestore
+                  final allCommodities = commodities.map((c) => c['id'].toString()).toList();
                     
                   for (String commodityId in allCommodities) {
                     if (!selectedItems.contains(commodityId)) {
@@ -1849,18 +2139,11 @@ class _HomePageState extends State<HomePage> {
                 child: Text("Uncheck All"),
               ),
             ],
-          ),
-          Expanded(
-            child: FutureBuilder<QuerySnapshot>(
-              future: _firestore.collection('commodities').get(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return Center(child: CircularProgressIndicator());
-                }
-                
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(child: Text("No commodities found"));
-                }
+          ),          Expanded(
+            child: Builder(
+              builder: (context) {
+                // Use cached commodities instead of fetching from Firestore
+                final cachedCommodityIds = commodities.map((c) => c['id'].toString()).toList();
                 
                 // Group commodities by category
                 Map<String, List<String>> groupedCommodities = {};
@@ -1870,9 +2153,8 @@ class _HomePageState extends State<HomePage> {
                   groupedCommodities[category] = [];
                 }
                 
-                // First, gather all the commodity IDs
-                for (var doc in snapshot.data!.docs) {
-                  final commodityId = doc.id;
+                // Use the cached commodity IDs instead of Firestore docs
+                for (String commodityId in cachedCommodityIds) {
                   final displayData = COMMODITY_ID_TO_DISPLAY[commodityId];
                   
                   if (displayData == null) continue;

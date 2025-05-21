@@ -1,8 +1,11 @@
 import 'package:Talipapa/tutorial_overlay.dart';
+import 'package:Talipapa/utils/data_cache.dart';
+import 'package:Talipapa/utils/forecast_cache_manager.dart';
 import 'package:flutter/material.dart';
 import 'constants.dart';
 import 'custom_bottom_navbar.dart'; // Import the custom bottom navigation bar
 import 'package:shared_preferences/shared_preferences.dart';
+import 'main.dart'; // Import HomePage to access fetchCommodities
 
 class SettingsPage extends StatefulWidget {
   @override
@@ -65,7 +68,57 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         );
       },
+    );  }
+
+  // Method to manually refresh data from Firestore  // Method to manually refresh data from Firestore
+  Future<void> manuallyFetchData() async {
+    print("🔄 Manual refresh requested from Settings");
+    
+    // Show a loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(kPink),
+          ),
+        );
+      }
     );
+    
+    try {
+      // Force cache invalidation
+      await DataCache.invalidateCache();
+      
+      // Force clear all forecast caches
+      await ForecastCacheManager.invalidateAllForecasts();
+      
+      // Clear dialog
+      Navigator.of(context, rootNavigator: true).pop();
+      
+      // Navigate to the HomePage with a reset flag
+      Navigator.pushReplacement(
+        context,
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) => HomePage(forceRefresh: true),
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+        ),
+      );
+    } catch (e) {
+      // Close loading dialog
+      Navigator.of(context, rootNavigator: true).pop();
+      
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to refresh data: $e'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   @override
@@ -90,8 +143,7 @@ class _SettingsPageState extends State<SettingsPage> {
         padding: EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Notifications Toggle
+          children: [            // Notifications Toggle
             ListTile(
               title: Text(
                 "Notifications",
@@ -107,11 +159,26 @@ class _SettingsPageState extends State<SettingsPage> {
                 },
               ),
             ),
-
+            
+            // Manually Fetch Data
+            ListTile(
+              title: Text(
+                "Manually Fetch Data",
+                style: TextStyle(fontSize: 18, color: textColor),
+              ),
+              subtitle: Text(
+                "If the list or graph is not loading properly, manually fetch data to reset cache",
+                style: TextStyle(fontSize: 12, color: textColor.withOpacity(0.7)),
+              ),
+              onTap: () {
+                manuallyFetchData(); // Fetch fresh data
+              },
+            ),
+            
             // Reset Data
             ListTile(
               title: Text(
-                "Reset Data",
+                "Reset Preferences",
                 style: TextStyle(fontSize: 18, color: textColor),
               ),
               onTap: () {
