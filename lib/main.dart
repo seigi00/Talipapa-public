@@ -16,6 +16,7 @@ import 'services/firestore_service.dart';
 import 'utils/debug_helper.dart';
 import 'utils/data_cache.dart';
 import 'utils/forecast_cache_manager.dart';
+import 'utils/forecast_debug.dart'; // New import for forecast debugging
 import 'package:fl_chart/fl_chart.dart';
 
 void main() async {
@@ -893,8 +894,7 @@ class _HomePageState extends State<HomePage> {
                                   final price = latestPrice['price'] ?? 0.0;
                                   final formattedDate = latestPrice['formatted_end_date'] ?? "-";                                  // Prepare the display prices based on selected forecast view
                                   List<Map<String, dynamic>> displayPrices = [];
-                                  
-                                  if (selectedForecast == "Now") {
+                                    if (selectedForecast == "Now") {
                                     // For "Now", show past two weeks of actual prices
                                     // Sort all actual prices by date (ascending)
                                     actualPrices.sort((a, b) {
@@ -910,6 +910,8 @@ class _HomePageState extends State<HomePage> {
                                     } else {
                                       displayPrices = List.from(actualPrices);
                                     }
+                                    
+                                    print("📈 NOW view: Showing ${displayPrices.length} actual prices");
                                   } else if (selectedForecast == "Next Week") {
                                     // For "Next Week", show current price and one-week forecast only
                                     displayPrices = [];
@@ -917,35 +919,39 @@ class _HomePageState extends State<HomePage> {
                                     // Add the most recent actual price
                                     if (actualPrices.isNotEmpty) {
                                       displayPrices.add(actualPrices.first); // Already sorted to have most recent first
-                                    }
-                                    
-                                    // Add one-week forecast
+                                    }                                    // Add one-week forecast (explicitly filter by forecast_period)
                                     final oneWeekForecasts = snapshot.data!
-                                        .where((p) => p['is_forecast'] == true)
+                                        .where((p) => p['is_forecast'] == true && p['forecast_period'] == "Next Week")
                                         .toList();
-                                        
-                                    // Filter to get only "Next Week" forecasts
-                                    final nextWeekForecasts = oneWeekForecasts.where((p) {
-                                      // Check if forecast is for next week based on date
-                                      if (p['end_date'] != null) {
-                                        final forecastDate = (p['end_date'] as Timestamp).toDate();
-                                        final today = DateTime.now();
-                                        final daysDifference = forecastDate.difference(today).inDays;
-                                        return daysDifference <= 7; // Within a week
-                                      }
-                                      return false;
-                                    }).toList();
+                                          print("📊 Found ${oneWeekForecasts.length} specific 'Next Week' forecasts");
                                     
-                                    if (nextWeekForecasts.isNotEmpty) {
+                                    // Debug forecast assignments
+                                    ForecastDebugHelper.verifyChronologicalAssignment(
+                                      snapshot.data!.where((p) => p['is_forecast'] == true).toList()
+                                    );
+                                    
+                                    if (oneWeekForecasts.isNotEmpty) {
                                       // Sort forecasts by date
-                                      nextWeekForecasts.sort((a, b) {
+                                      oneWeekForecasts.sort((a, b) {
                                         final aDate = a['end_date'] as Timestamp;
                                         final bDate = b['end_date'] as Timestamp;
                                         return aDate.compareTo(bDate);
-                                      });
+                                      });                                      // Add first next week forecast
+                                      displayPrices.add(oneWeekForecasts.first);
+                                      print("🔮 Added 'Next Week' forecast: ${oneWeekForecasts.first['price']} for date ${oneWeekForecasts.first['formatted_end_date']}");
                                       
-                                      // Add first next week forecast
-                                      displayPrices.add(nextWeekForecasts.first);
+                                      // Additional debugging information
+                                      print("🔍 Forecast details - ID: ${oneWeekForecasts.first['commodity_id']}, Period: ${oneWeekForecasts.first['forecast_period']}");
+                                    } else {
+                                      print("⚠️ No 'Next Week' forecasts found");
+                                    }// Print what we're displaying
+                                    print("📈 NEXT WEEK view: Showing ${displayPrices.length} prices (${displayPrices.where((p) => p['is_forecast'] == true).length} forecasts)");
+                                    
+                                    // Log all forecast periods for debugging
+                                    final allForecasts = snapshot.data!.where((p) => p['is_forecast'] == true).toList();
+                                    print("\n📊 DEBUG: All Forecasts:");
+                                    for (var forecast in allForecasts) {
+                                      print("🔮 Commodity ID: ${forecast['commodity_id']}, Period: ${forecast['forecast_period']}, Date: ${forecast['formatted_end_date']}, Price: ${forecast['price']}");
                                     }
                                   } else {
                                     // For "Two Weeks", show current + one-week + two-weeks forecasts
@@ -954,25 +960,37 @@ class _HomePageState extends State<HomePage> {
                                     // Add the most recent actual price
                                     if (actualPrices.isNotEmpty) {
                                       displayPrices.add(actualPrices.first);
-                                    }
-                                    
-                                    // Add all forecast prices
+                                    }                                    // Add all forecast prices
                                     final forecastPrices = snapshot.data!
                                         .where((p) => p['is_forecast'] == true)
                                         .toList();
                                     
+                                    // Filter to specific forecast period
+                                    final periodForecasts = forecastPrices
+                                        .where((p) => p['forecast_period'] == "Two Weeks")
+                                        .toList();
+                                      
                                     // Sort forecasts by date
-                                    forecastPrices.sort((a, b) {
+                                    periodForecasts.sort((a, b) {
                                       final aDate = a['end_date'] as Timestamp;
                                       final bDate = b['end_date'] as Timestamp;
                                       return aDate.compareTo(bDate);
                                     });
                                     
-                                    // Add forecasts (limit to 2 to show one-week and two-weeks)
-                                    if (forecastPrices.isNotEmpty) {
-                                      for (int i = 0; i < (forecastPrices.length > 2 ? 2 : forecastPrices.length); i++) {
-                                        displayPrices.add(forecastPrices[i]);
-                                      }                                    }
+                                    print("📊 Found ${periodForecasts.length} specific 'Two Weeks' forecasts");
+                                    print("📊 Total forecast entries: ${forecastPrices.length}");
+                                    print("📊 Forecast distribution: ${forecastPrices.where((p) => p['forecast_period'] == 'Next Week').length} Next Week, ${forecastPrices.where((p) => p['forecast_period'] == 'Two Weeks').length} Two Weeks");
+                                      // Add forecasts (use period-specific forecasts)
+                                    if (periodForecasts.isNotEmpty) {                                      // Add just the first Two Weeks forecast
+                                      displayPrices.add(periodForecasts.first);
+                                      print("🔮 Added 'Two Weeks' forecast: ${periodForecasts.first['price']} for date ${periodForecasts.first['formatted_end_date']}");
+                                      print("🔍 Forecast details - ID: ${periodForecasts.first['commodity_id']}, Period: ${periodForecasts.first['forecast_period']}");
+                                    } else {
+                                      print("⚠️ No 'Two Weeks' forecasts found");
+                                    }
+                                    
+                                    // Print what we're displaying
+                                    print("📈 TWO WEEKS view: Showing ${displayPrices.length} prices (${displayPrices.where((p) => p['is_forecast'] == true).length} forecasts)");
                                   }
 
                                   // Create chart spots
