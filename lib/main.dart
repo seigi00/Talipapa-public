@@ -184,8 +184,7 @@ class _HomePageState extends State<HomePage> {
         String cachedForecastStartDate = "";
         if (forecastPeriod != "Now") {
           cachedForecastStartDate = await DataCache.getForecastStartDate();
-        }
-          // Always load global sort and filter settings
+        }        // Always load global sort and filter settings
         String? sortToUse = await DataCache.getSelectedSort();
         String? filterToUse = await DataCache.getSelectedFilter("global");
         
@@ -198,8 +197,9 @@ class _HomePageState extends State<HomePage> {
           globalPriceDate = forecastCache['globalPriceDate'] ?? "";
           forecastStartDate = forecastCache['forecastStartDate'] ?? cachedForecastStartDate;
           selectedForecast = forecastPeriod;
-          selectedSort = sortToUse;
-          selectedFilter = filterToUse;
+          // Preserve existing sort/filter selections if they exist, otherwise use the loaded values
+          selectedSort = selectedSort ?? sortToUse;
+          selectedFilter = selectedFilter ?? filterToUse;
         });
         
         // Apply the sorting and filtering after the setState
@@ -601,11 +601,21 @@ class _HomePageState extends State<HomePage> {
     print("Favorites loaded: $favoriteCommodities");
   }  Future<void> saveState() async {
     // Save filter and sort globally (not forecast-specific)
-    await DataCache.saveSelectedFilter(selectedFilter, "global");
-    await DataCache.saveSelectedSort(selectedSort);
+    // Always save actual values including "None" for both filter and sort
+    final filterToSave = selectedFilter ?? "None";
+    final sortToSave = selectedSort ?? "None";
     
-    print("State saved globally: Filter = $selectedFilter, Sort = $selectedSort");
-  }  Future<void> loadState() async {
+    await DataCache.saveSelectedFilter(filterToSave, "global");
+    await DataCache.saveSelectedSort(sortToSave);
+    
+    // Update state with the values we just saved
+    setState(() {
+      selectedFilter = filterToSave;
+      selectedSort = sortToSave;
+    });
+    
+    print("State saved globally: Filter = $filterToSave, Sort = $sortToSave");
+  }Future<void> loadState() async {
     try {
       // Load filter globally
       final filterValue = await DataCache.getSelectedFilter("global");
@@ -616,7 +626,7 @@ class _HomePageState extends State<HomePage> {
       if (finalFilterValue == null) {
         final prefs = await SharedPreferences.getInstance();
         final legacyFilter = prefs.getString('selectedFilter');
-        finalFilterValue = legacyFilter == "None" ? null : legacyFilter;
+        finalFilterValue = legacyFilter; // Always use the actual value including "None"
         
         // If we found a legacy filter, migrate it to the new global system
         if (finalFilterValue != null) {
@@ -631,6 +641,17 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         selectedFilter = finalFilterValue;
         selectedSort = sortValue;
+        
+        // Ensure we always have valid values (at least "None")
+        if (selectedFilter == null) {
+          selectedFilter = "None";
+          DataCache.saveSelectedFilter("None", "global");
+        }
+        
+        if (selectedSort == null) {
+          selectedSort = "None";
+          DataCache.saveSelectedSort("None");
+        }
       });      
       print("State loaded globally: Filter = $selectedFilter, Sort = $selectedSort");
       
@@ -1766,12 +1787,23 @@ class _HomePageState extends State<HomePage> {
             if (selectedForecast != identifier) {
               // Save current commodity selection before changing forecast
               final currentCommodityId = selectedCommodityId;
+              // Save current sort and filter selections explicitly
+              final currentSort = selectedSort;
+              final currentFilter = selectedFilter;
               
               setState(() {
                 selectedForecast = identifier;
-                // Don't clear selectedCommodityId to preserve selection across forecast changes
-                // selectedFilter and selectedSort already remain unchanged (global settings)
+                // Don't clear selections to preserve across forecast changes
+                // selectedCommodityId, selectedFilter and selectedSort remain unchanged
               });
+              
+              // Explicitly save sort and filter preferences to cache
+              if (currentSort != null) {
+                await DataCache.saveSelectedSort(currentSort);
+              }
+              if (currentFilter != null) {
+                await DataCache.saveSelectedFilter(currentFilter, "global");
+              }
               
               // Save selected forecast to cache immediately
               await DataCache.saveSelectedForecast(identifier);
@@ -2039,6 +2071,11 @@ class _HomePageState extends State<HomePage> {
     
     if (selectedFilter == null || selectedFilter == "None") {
       result = List.from(displayedCommodities);
+      // Ensure "None" is saved properly
+      if (selectedFilter == null) {
+        DataCache.saveSelectedFilter("None", "global");
+        selectedFilter = "None";
+      }
     } else if (selectedFilter == "Favorites") {
       result = allCommodities.where((commodity) {
         final commodityId = commodity['id'].toString();
@@ -2065,10 +2102,17 @@ class _HomePageState extends State<HomePage> {
     
     return result;
    }
-  
-  // Helper function to apply the current sort to any list
+    // Helper function to apply the current sort to any list
   void _applySortToList(List<Map<String, dynamic>> listToSort) {
-    if (selectedSort == "Name") {
+    // If sorting is explicitly set to "None" or null, handle accordingly
+    if (selectedSort == null) {
+      // Ensure "None" is saved properly
+      DataCache.saveSelectedSort("None");
+      selectedSort = "None";
+      return; // Don't apply any sorting
+    } else if (selectedSort == "None") {
+      return; // Don't apply any sorting
+    } else if (selectedSort == "Name") {
       listToSort.sort((a, b) {
         final nameA = COMMODITY_ID_TO_DISPLAY[a['id'].toString()]?['display_name'] ?? "";
         final nameB = COMMODITY_ID_TO_DISPLAY[b['id'].toString()]?['display_name'] ?? "";

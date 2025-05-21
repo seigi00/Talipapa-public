@@ -186,13 +186,13 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
       print('❌ Error saving selected sort to cache: $e');
     }
   }
-  
-  // Get selected sort option
+    // Get selected sort option
   static Future<String?> getSelectedSort() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final sortValue = prefs.getString(_selectedSortKey);
-      return sortValue == "None" ? null : sortValue;
+      // Return the actual value including "None" to preserve selection
+      return sortValue;
     } catch (e) {
       print('❌ Error getting selected sort from cache: $e');
       return null;
@@ -233,14 +233,14 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
       print('❌ Error saving selected filter to cache: $e');
     }
   }
-  
-  // Get selected filter option for specific forecast period
+    // Get selected filter option for specific forecast period
   static Future<String?> getSelectedFilter(String forecastPeriod) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final key = '${forecastPeriod}_selected_filter';
       final filterValue = prefs.getString(key);
-      return filterValue == "None" ? null : filterValue;
+      // Return the actual value including "None" to preserve selection
+      return filterValue;
     } catch (e) {
       print('❌ Error getting selected filter from cache: $e');
       return null;
@@ -258,14 +258,14 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
       print('❌ Error saving selected sort to cache: $e');
     }
   }
-  
   // Get selected sort option for specific forecast period
   static Future<String?> getSelectedSortForForecast(String forecastPeriod) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final key = '${forecastPeriod}_selected_sort';
       final sortValue = prefs.getString(key);
-      return sortValue == "None" ? null : sortValue;
+      // Return the actual value including "None" to preserve selection
+      return sortValue;
     } catch (e) {
       print('❌ Error getting selected sort from cache: $e');
       return null;
