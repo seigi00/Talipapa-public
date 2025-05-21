@@ -180,23 +180,36 @@ class _HomePageState extends State<HomePage> {
         final List<dynamic> tempFilteredCommodities = forecastCache['filteredCommodities'] ?? tempCommodities;
         final List<Map<String, dynamic>> typedFilteredCommodities = tempFilteredCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
         
-        // Update the UI
-        final cachedSort = await DataCache.getSelectedSort();
-        
         // Check if we need to load the forecast start date from the DataCache
         String cachedForecastStartDate = "";
         if (forecastPeriod != "Now") {
           cachedForecastStartDate = await DataCache.getForecastStartDate();
         }
+          // Always load global sort and filter settings
+        String? sortToUse = await DataCache.getSelectedSort();
+        String? filterToUse = await DataCache.getSelectedFilter("global");
         
+        print("✅ Loaded global sort and filter settings: Sort=$sortToUse, Filter=$filterToUse");
+        
+        // Now set the state with the determined values
         setState(() {
           commodities = typedCommodities;
           filteredCommodities = typedFilteredCommodities;
           globalPriceDate = forecastCache['globalPriceDate'] ?? "";
           forecastStartDate = forecastCache['forecastStartDate'] ?? cachedForecastStartDate;
           selectedForecast = forecastPeriod;
-          selectedSort = forecastCache['selectedSort'] ?? cachedSort;
+          selectedSort = sortToUse;
+          selectedFilter = filterToUse;
         });
+        
+        // Apply the sorting and filtering after the setState
+        if (selectedFilter != null) {
+          _applyFiltersOnly();
+        }
+        if (selectedSort != null) {
+          _applySorting();
+        }
+        
         print("✅ Successfully loaded forecast data from cache for $forecastPeriod");
         return true;
       }
@@ -315,8 +328,7 @@ class _HomePageState extends State<HomePage> {
     } else {
       print("🔄 No forecast change detected, skipping fetch (still on $selectedForecast)");
     }
-  }
-  // Apply filters without fetching data from Firestore
+  }  // Apply filters without fetching data from Firestore
   void _applyFiltersOnly() {
     print("🔍 Applying filters to existing data without Firestore fetch");
     setState(() {
@@ -346,8 +358,11 @@ class _HomePageState extends State<HomePage> {
       // Cache the filtered result
       DataCache.saveFilteredCommodities(filteredCommodities);
     });
-  }
-    // Apply sorting to the filtered list
+      // Save the filter preference globally
+    DataCache.saveSelectedFilter(selectedFilter, "global").then((_) {
+      print("✅ Saved global filter preference: $selectedFilter");
+    });
+  }    // Apply sorting to the filtered list
   void _applySorting() {
     if (selectedSort == "Name") {
       filteredCommodities.sort((a, b) {
@@ -368,9 +383,10 @@ class _HomePageState extends State<HomePage> {
         return priceB.compareTo(priceA);
       });
     }
-    
-    // Cache the sort preference
-    DataCache.saveSelectedSort(selectedSort);
+      // Cache the sort preference globally
+    DataCache.saveSelectedSort(selectedSort).then((_) {
+      print("✅ Saved global sort preference: $selectedSort");
+    });
   }// Fetch commodities from Firestore
   Future<void> fetchCommodities() async {
     try {
@@ -519,13 +535,13 @@ class _HomePageState extends State<HomePage> {
         await DataCache.saveForecastStartDate(forecastStartDate);
       }
       
-      print("✅ Saved commodity data to cache");// Save forecast data to specific forecast cache for all periods (including "Now")
+      print("✅ Saved commodity data to cache");      // Save forecast data to specific forecast cache for all periods (including "Now")
+      // But don't include sort/filter settings since they're now global
       final forecastData = {
         'commodities': commodities,
         'filteredCommodities': filteredCommodities,
         'globalPriceDate': globalPriceDate,
         'forecastStartDate': forecastStartDate,
-        'selectedSort': selectedSort,
       };
       
       await ForecastCacheManager.saveForecastData(selectedForecast, forecastData);
@@ -583,31 +599,39 @@ class _HomePageState extends State<HomePage> {
       }
     });
     print("Favorites loaded: $favoriteCommodities");
-  }
-  Future<void> saveState() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('selectedFilter', selectedFilter ?? "None");
-    
-    // Save sort using the DataCache method instead
+  }  Future<void> saveState() async {
+  // Save filter and sort globally (not forecast-specific)
+    await DataCache.saveSelectedFilter(selectedFilter, "global");
     await DataCache.saveSelectedSort(selectedSort);
     
-    print("State saved: Filter = $selectedFilter, Sort = $selectedSort");
+    print("State saved globally: Filter = $selectedFilter, Sort = $selectedSort");
   }  Future<void> loadState() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      // Load filter globally
+      final filterValue = await DataCache.getSelectedFilter("global");
       
-      // Load filter from SharedPreferences (keeping compatibility with old implementation)
-      final filterValue = prefs.getString('selectedFilter');
+      // For backwards compatibility, if no global filter is found,
+      // try the old style filter setting
+      String? finalFilterValue = filterValue;
+      if (finalFilterValue == null) {
+        final prefs = await SharedPreferences.getInstance();
+        final legacyFilter = prefs.getString('selectedFilter');
+        finalFilterValue = legacyFilter == "None" ? null : legacyFilter;
+        
+        // If we found a legacy filter, migrate it to the new global system
+        if (finalFilterValue != null) {
+          await DataCache.saveSelectedFilter(finalFilterValue, "global");
+          print("✅ Migrated legacy filter setting to global filter system");
+        }
+      }
       
-      // Load sort from DataCache (new implementation)
+      // Load sort from DataCache
       final sortValue = await DataCache.getSelectedSort();
       
       setState(() {
-        selectedFilter = filterValue == "None" ? null : filterValue;
+        selectedFilter = finalFilterValue;
         selectedSort = sortValue;
-      });
-
-      print("State loaded: Filter = $selectedFilter, Sort = $selectedSort");
+      });      print("State loaded globally: Filter = $selectedFilter, Sort = $selectedSort");
       
       // Apply the loaded filter and sort
       _applyFiltersOnly();
@@ -645,11 +669,11 @@ class _HomePageState extends State<HomePage> {
                   });
                 },
               ),
-              actions: [
-                TextButton(
-                  onPressed: () async {
+              actions: [                TextButton(
+                  onPressed: () {
                     Navigator.pop(context);
-                    await fetchCommodities(); // Reload the list
+                    // Apply filters to update the UI with new favorites
+                    _applyFiltersOnly();
                     setState(() {}); // Force UI update
                   },
                   child: Text("Done"),
@@ -691,14 +715,16 @@ class _HomePageState extends State<HomePage> {
                   });
                 },
               ),
-              actions: [
-                TextButton(
+              actions: [                TextButton(
                   onPressed: () async {
                     setState(() {
                       displayedCommoditiesIds = List.from(tempSelectedItems); // Save changes to the main list
                     });
                     await saveDisplayedCommodities(); // Persist changes
-                    await fetchCommodities(); // Reload the main list
+                    
+                    // Apply filters to reflect changes without fetching from Firestore
+                    _applyFiltersOnly();
+                    
                     Navigator.pop(context); // Close the dialog
                   },
                   child: Text("Done"),
@@ -862,7 +888,7 @@ class _HomePageState extends State<HomePage> {
                     style: TextStyle(
                       color: kBlue,
                       fontSize: 12,
-                      fontWeight: FontWeight.w400,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
                 ),
@@ -881,24 +907,15 @@ class _HomePageState extends State<HomePage> {
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,                    children: [                      Container(
-                        height: 200, // Return to more rectangular dimensions
-                        width: MediaQuery.of(context).size.width * 0.95, // Use almost the full width
+                        height: 230, // Return to more rectangular dimensions
+                        width: MediaQuery.of(context).size.width * 0.9, // Use almost the full width
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
                             colors: [Colors.white, const Color(0xFFF8F8FF)],
                           ),
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black12,
-                              blurRadius: 8,
-                              spreadRadius: 1,
-                              offset: Offset(0, 3),
-                            ),
-                          ],
-                          border: Border.all(color: Colors.grey.shade200, width: 1.5),
+                    
                         ),
                         child: selectedCommodityId == null
                             ? Center(child: Text("Select a commodity to see price graph"))
@@ -1226,9 +1243,9 @@ class _HomePageState extends State<HomePage> {
                                                         dateText = "Latest";
                                                       } else if (forecastPeriod == "Next Week") {
                                                         // Use Week 1 for the Two Weeks view to prevent overflow
-                                                        dateText = selectedForecast == "Two Weeks" ? "Next Week" : "Next\nWeek";
+                                                        dateText = selectedForecast == "Two Weeks" ? "Week 1" : "Next\nWeek";
                                                       } else if (forecastPeriod == "Two Weeks") {
-                                                        dateText = "Two Weeks";
+                                                        dateText = "Week 2";
                                                       }
                                                     }
                                                     
@@ -1353,9 +1370,9 @@ class _HomePageState extends State<HomePage> {
                                         ),                                        margin: const EdgeInsets.only(top: 8.0),
                                         child: Column(
                                           children: [                                            Text(
-                                              "Price Trends",
+                                              "Price Trend",
                                               style: TextStyle(
-                                                fontSize: 16,
+                                                fontSize: 13,
                                                 color: kBlue,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -1745,13 +1762,14 @@ class _HomePageState extends State<HomePage> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
             ),
-          ),
-          onPressed: () async {
+          ),          onPressed: () async {
             if (selectedForecast != text) {
               setState(() {
                 selectedForecast = text;
                 // Clear selected commodity when forecast changes
                 selectedCommodityId = null;
+                // Note: selectedFilter and selectedSort remain unchanged
+                // since they're now global settings
               });
               
               // Save selected forecast to cache immediately
@@ -1816,26 +1834,43 @@ class _HomePageState extends State<HomePage> {
     final String unit = display['unit'] ?? "kg";
     final String specification = display["specification"] ?? "-";
     final String category = display["category"] ?? "-";
-
-    // Get the price (handle different formats)
+    
+    // Get the price and date
     final price = commodity['weekly_average_price'];
-    final formattedPrice = (price is double) 
-        ? price.toStringAsFixed(2) 
-        : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2);
+    final priceDate = commodity['price_date'] ?? '';
+    final isForecast = commodity['is_forecast'] ?? false;
+    
+    // Handle empty price display
+    final bool hasPriceData = price != null && price.toString().isNotEmpty && price != 0.0;
+    final String formattedPrice = !hasPriceData 
+        ? "-" 
+        : (price is double) 
+            ? price.toStringAsFixed(2) 
+            : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2);
+            
+    // Check for last historical price (for "Now" view with no latest price)
+    final hasHistoricalPrice = selectedForecast == "Now" && !hasPriceData && 
+                          commodity['last_historical_price'] != null &&
+                          commodity['last_historical_price'].toString().isNotEmpty &&
+                          commodity['last_historical_price'] != 0.0;
+                          
+    final String historicalPrice = hasHistoricalPrice
+      ? (commodity['last_historical_price'] is double)
+          ? commodity['last_historical_price'].toStringAsFixed(2)
+          : (double.tryParse(commodity['last_historical_price'].toString()) ?? 0.0).toStringAsFixed(2)
+      : "-";
+      
+    final String historicalDate = commodity['last_historical_date'] ?? '';
+
+    // Track if we should show "As of" date
+    final bool showAsOfDate = (selectedForecast == "Now" && !isForecast && priceDate.isNotEmpty) || 
+                         (selectedForecast == "Now" && !hasPriceData && hasHistoricalPrice);
 
     // Alternate background color based on index
     final backgroundColor = index % 2 == 0 ? Colors.white : kAltGray;
-
-    // Determine if we should show the category text
+    
     // Hide category when user filtered by a specific category (not "None" or "Favorites")
     final bool showCategory = selectedFilter == null || selectedFilter == "Favorites";
-
-    // Get forecast period for display
-    final bool isForecast = commodity['is_forecast'] == true;
-    final String forecastPeriod = commodity['forecast_period'] ?? "";
-    final String forecastText = isForecast 
-        ? (forecastPeriod.isNotEmpty ? "(Forecast - $forecastPeriod)" : "(Forecast)")
-        : "";
 
     return AnimatedContainer(
       duration: Duration(milliseconds: 200),
@@ -1867,91 +1902,122 @@ class _HomePageState extends State<HomePage> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Display the commodity image
+            // Commodity image (re-added)
             CircleAvatar(
-              radius: 24,
               backgroundImage: AssetImage(
                 'assets/commodity_images/${getCommodityImage(commodityId)}',
               ),
+              radius: 24,
             ),
-            SizedBox(width: 16),
+            SizedBox(width: 12),
+            // Commodity details (left side)
             Expanded(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Commodity name with unit
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          displayName,
-                          style: TextStyle(fontWeight: FontWeight.w300, fontSize: 20),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      SizedBox(width: 4),
-                      Text(
-                        "($unit)",
-                        style: TextStyle(
-                          fontWeight: FontWeight.w300,
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 4),
-                  // Display specification (and category if not filtered by category)
                   Text(
-                    showCategory ? "$category · $specification" : specification,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w300,
-                      fontSize: 12,
-                      color: Colors.grey,
-                    ),
+                    displayName,
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  SizedBox(height: 4),
+                  Text(
+                    specification,
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (showCategory) ...[
+                    SizedBox(height: 4),
+                    Text(
+                      category,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.grey,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ],
               ),
             ),
             SizedBox(width: 5),
-            // Price and date
+            // Price and date (right side)
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  "₱$formattedPrice",
-                  style: TextStyle(fontWeight: FontWeight.w500, fontSize: 20),
-                ),
-                // Always show date for non-global date prices to ensure context for older prices
-                if (commodity['price_date'] != null && 
-                    commodity['price_date'].toString().isNotEmpty && 
-                    commodity['is_global_date'] == false)
-                  Text(
-                    "as of: ${commodity['price_date']}",
-                    style: TextStyle(
-                      fontWeight: FontWeight.w300,
-                      fontSize: 12,
-                      color: kBlue,
-                    ),
+                  hasPriceData 
+                    ? "₱$formattedPrice" 
+                    : (hasHistoricalPrice && selectedForecast == "Now") 
+                      ? "₱$historicalPrice" 
+                      : "₱-",
+                  style: TextStyle(
+                    fontWeight: (hasPriceData || (hasHistoricalPrice && selectedForecast == "Now")) ? FontWeight.w500 : FontWeight.normal, 
+                    fontSize: 20,
+                    color: (hasPriceData || (hasHistoricalPrice && selectedForecast == "Now")) ? null : Colors.grey
                   ),
-                // Show forecast indicator with specific forecast period
-                if (isForecast)
+                ),
+                // Show data status
+                if (!hasPriceData && !hasHistoricalPrice)
+                  Container(
+                    margin: EdgeInsets.only(top: 4),
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.withOpacity(0.3), width: 1),
+                    ),
+                    child: Text(
+                      selectedForecast != "Now" ? "Insufficient data" : "No data",
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 11,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  )
+                // Show forecast indicator or date
+                else if (isForecast)
+                  Container(
+                    margin: EdgeInsets.only(top: 4),
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: kPink.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: kPink.withOpacity(0.3), width: 1),
+                    ),
+                    child: Text(
+                      "Forecast",
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 11,
+                        color: kPink,
+                      ),
+                    ),
+                  )
+                // Show date for actual prices or historical prices in "Now" view
+                else if (selectedForecast == "Now")
                   Text(
-                    forecastText,
+                    hasPriceData && priceDate.isNotEmpty
+                      ? "As of $priceDate"
+                      : hasHistoricalPrice && historicalDate.isNotEmpty
+                        ? "As of $historicalDate"
+                        : "",
                     style: TextStyle(
-                      fontWeight: FontWeight.w300,
-                      fontSize: 12,
-                      color: Colors.orange,
+                      fontSize: 11,
+                      color: Colors.grey,
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
               ],
             ),
           ],
         ),
-      ));
+      ),
+    );
   }
   List<String> getAllCommodities() {
     List<String> allCommodities = [];
@@ -1992,7 +2058,7 @@ class _HomePageState extends State<HomePage> {
     Future.microtask(() => DataCache.saveFilteredCommodities(result));
     
     return result;
-  }
+   }
   
   // Helper function to apply the current sort to any list
   void _applySortToList(List<Map<String, dynamic>> listToSort) {
@@ -2050,13 +2116,10 @@ class _HomePageState extends State<HomePage> {
           // Check/Uncheck All buttons
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              TextButton(
-                onPressed: () async {
-                  final querySnapshot = await _firestore.collection('commodities').get();
-                  final allCommodities = querySnapshot.docs
-                    .map((doc) => doc.id)
-                    .toList();
+            children: [              TextButton(
+                onPressed: () {
+                  // Use cached commodities instead of fetching from Firestore
+                  final allCommodities = commodities.map((c) => c['id'].toString()).toList();
                     
                   for (String commodityId in allCommodities) {
                     if (!selectedItems.contains(commodityId)) {
@@ -2076,18 +2139,11 @@ class _HomePageState extends State<HomePage> {
                 child: Text("Uncheck All"),
               ),
             ],
-          ),
-          Expanded(
-            child: FutureBuilder<QuerySnapshot>(
-              future: _firestore.collection('commodities').get(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return Center(child: CircularProgressIndicator());
-                }
-                
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(child: Text("No commodities found"));
-                }
+          ),          Expanded(
+            child: Builder(
+              builder: (context) {
+                // Use cached commodities instead of fetching from Firestore
+                final cachedCommodityIds = commodities.map((c) => c['id'].toString()).toList();
                 
                 // Group commodities by category
                 Map<String, List<String>> groupedCommodities = {};
@@ -2097,9 +2153,8 @@ class _HomePageState extends State<HomePage> {
                   groupedCommodities[category] = [];
                 }
                 
-                // First, gather all the commodity IDs
-                for (var doc in snapshot.data!.docs) {
-                  final commodityId = doc.id;
+                // Use the cached commodity IDs instead of Firestore docs
+                for (String commodityId in cachedCommodityIds) {
                   final displayData = COMMODITY_ID_TO_DISPLAY[commodityId];
                   
                   if (displayData == null) continue;

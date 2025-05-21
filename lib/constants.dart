@@ -1,15 +1,12 @@
 // Contains color constants and commodity list 
 import 'package:flutter/material.dart';
 
-const kGreen = Color(0xFFD1EE64);
-const kBlue = Color(0xFF042F80);
-const kPink = Color(0xFFF18496);
-const kLightGray = Color(0xFFF9F9F9);
+const kGreen = Color(0xFF8FC57A); // Updated from 0xFFD1EE64
+const kBlue = Color(0xFF212121); // Updated from 0xFF042F80
+const kPink = Color(0xFFEF959D); // Updated from 0xFFF18496
+const kLightGray = Color(0xFFF9F9F9); 
 const kAltGray = Color(0xFFF7F7F7);
 const kDivider = Color(0xFFEDEDED);
-
-//darkmode
-const kDarkAltGray = Color.fromARGB(255, 42, 54, 77);
 
 // Commodity display mapping (UUID-based)
 // Update COMMODITY_ID_TO_DISPLAY to use the category directly (no separate type field)

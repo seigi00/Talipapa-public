@@ -92,6 +92,7 @@ flutter:
         - asset: assets/fonts/courierprime_bolditalic.ttf
           weight: 700
           style: italic
+  
 
     - family: Roboto
       fonts:
