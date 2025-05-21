@@ -18,6 +18,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
   
   // Store the latest prices in state
   Map<String, dynamic> _latestPrices = {};
+  Map<String, dynamic> _forecastedPrices = {};
   bool _isLoading = false;
   bool _isLoadingPrices = true;
   
@@ -37,9 +38,11 @@ class _ChatbotPageState extends State<ChatbotPage> {
     try {
       if (await _isCacheValid()) {
         final cachedPrices = await _getLatestPricesFromCache();
-        if (cachedPrices != null && cachedPrices.isNotEmpty) {
+        // final cachedForecastPrice = await _getForecastPricesFromCache(); //To be implemented
+        if (cachedPrices != null && cachedPrices.isNotEmpty) { //Add logic here as well
           setState(() {
             _latestPrices = cachedPrices;
+            // _forecastedPrices = cachedForecastPrices;
             _isLoadingPrices = false;
           });
           print('✅ Using cached latest prices in ChatbotPage');
@@ -50,12 +53,15 @@ class _ChatbotPageState extends State<ChatbotPage> {
       // If cache is invalid or empty, fetch from Firestore
       print('🔄 Fetching latest prices from Firestore in ChatbotPage');
       final prices = await FirestoreService().fetchAllLatestPrices();
+      final forecastPrices = await FirestoreService().fetchAllForecastedPricesForChatbot();
+              
       
       // Save to cache for future use
       await _saveLatestPricesToCache(prices);
       
       setState(() {
         _latestPrices = prices;
+        _forecastedPrices = forecastPrices;
         _isLoadingPrices = false;
       });
       print('✅ Fetched and cached latest prices in ChatbotPage');
@@ -66,6 +72,9 @@ class _ChatbotPageState extends State<ChatbotPage> {
       });
     }
   }
+
+
+  
   
   // Check if cache is valid (not expired)
   Future<bool> _isCacheValid() async {
@@ -154,11 +163,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
     if (_latestPrices.isEmpty) {
       buffer.writeln("No price data is currently available.");
     } else {
-      
-      print("Type of priceData: ${_latestPrices.runtimeType}");
-
       _latestPrices.forEach((commodityId, priceData) {
-        print("Contents of priceData: $priceData");
         
         // Get the commodity ID from the original data
         final id = priceData['original_data']['commodity_id'] ?? '';
@@ -177,12 +182,47 @@ class _ChatbotPageState extends State<ChatbotPage> {
         
         final price = priceData['price'] ?? 0.0;
         final date = priceData['formatted_end_date'] ?? '';
-        
+        //Add Forecasted Prices 
+        print("🥰🥰🥰🥰🥰🥰🥰🥰$id");
+        final forecastedPrices = FirestoreService().fetchForecastPrices(id);
+        print("FORECASTED PRICES CONTEXT HERE $id $forecastedPrices");
         // Use the display name instead of the ID
         buffer.writeln("$displayName: ₱$price per $unit as of $date");
       });
     }
     
+    buffer.writeln("FORECASTED PRICES:");
+    
+    // if (_forecastedPrices.isEmpty) {
+    //   buffer.writeln("No Forecast price data is currently available.");
+    // } else {
+    //   _forecastedPrices.forEach((commodityId, commodityId) {
+    //     
+    //     // Get the commodity ID from the original data
+    //     final id = priceData['original_data']['commodity_id'] ?? '';
+    //     
+    //     // Look up the display name from the constants
+    //     String displayName = 'Unknown';
+    //     String unit = 'kg'; // Default unit
+    //     
+    //     if (COMMODITY_ID_TO_DISPLAY.containsKey(id)) {
+    //       // Get the display name from the mapping
+    //       displayName = COMMODITY_ID_TO_DISPLAY[id]?['display_name'] ?? 'Unknown';
+    //       
+    //       // Get the unit if available
+    //       unit = COMMODITY_ID_TO_DISPLAY[id]?['unit'] ?? 'kg';
+    //     }
+    //     
+    //     final price = priceData['price'] ?? 0.0;
+    //     final date = priceData['formatted_end_date'] ?? '';
+    //     //Add Forecasted Prices 
+    //     print("🥰🥰🥰🥰🥰🥰🥰🥰$id");
+    //     print("FORECASTED PRICES CONTEXT HERE $id forecastedPrices");
+    //     // Use the display name instead of the ID
+    //     buffer.writeln("$displayName: ₱$price per $unit as of $date");
+    //   });
+    // }
+
     return buffer.toString();
   }
 
@@ -268,12 +308,14 @@ class _ChatbotPageState extends State<ChatbotPage> {
     try {
       // Fetch fresh data from Firestore
       final prices = await FirestoreService().fetchAllLatestPrices();
+      final forecastedprices = await FirestoreService().fetchAllForecastedPricesForChatbot();
       
       // Save to cache for future use
       await _saveLatestPricesToCache(prices);
       
       setState(() {
         _latestPrices = prices;
+        _forecastedPrices = forecastedprices;
         _isLoadingPrices = false;
       });
       

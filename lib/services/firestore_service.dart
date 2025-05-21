@@ -60,7 +60,7 @@ class FirestoreService {
           .catchError((error) {
             print("❌ Firestore query error: $error");
             if (error.toString().contains("requires an index")) {
-              print("⚠️ This query requires a Firestore index. Please create it using the link in the error message.");
+              print("⚠️ fetchWeeklyPrices. This query requires a Firestore index. Please create it using the link in the error message.");
             }
             throw error; // Rethrow to be caught by the outer try-catch
           });
@@ -139,31 +139,54 @@ class FirestoreService {
       // Check if this is an index error and provide more helpful message
       if (e.toString().contains("requires an index")) {
         print("📢 IMPORTANT: You need to create a Firestore index for price_entries collection.");
-        print("📢 Please click the link in the error message above or go to Firebase console to create the required index.");
+        print("📢 fetchWeeklyPrices. Please click the link in the error message above or go to Firebase console to create the required index.");
       }
       
       return [];
     }
-  }  // Fetch only forecasted prices for a commodity
-  Future<List<Map<String, dynamic>>> fetchForecastPrices(String commodityId) async {
+  } 
+  // Fetch only forecasted prices for a commodity
+    Future<List<Map<String, dynamic>>> fetchForecastPrices(String commodityId) async {
     try {
-      final snapshot = await _db
+      final snapshot = await FirebaseFirestore.instance
           .collection('price_entries')
           .where('commodity_id', isEqualTo: commodityId)
           .where('is_forecast', isEqualTo: true)
           .orderBy('end_date') // Use end_date for consistency with other queries
           .get();
       
+      // Debug: Print the number of documents retrieved
+      print('❤️Retrieved ${snapshot.docs.length} forecast documents for commodity $commodityId');
+      print('❤️Retrieved ${snapshot.docs} forecast documents for commodity $commodityId');
+      
       return snapshot.docs.map((doc) {
         final data = doc.data() as Map<String, dynamic>;
         
-        // Format start_date and end_date
-        String formattedStartDate = data['start_date'] != null ? 
-            _formatTimestamp(data['start_date']) : "";
+        // Debug: Print individual document data
+        print('Document ID: ${doc.id}, Data: $data');
         
-        String formattedEndDate = data['end_date'] != null ? 
-            _formatTimestamp(data['end_date']) : "";
-          // Ensure price is a valid number
+        // Format start_date and end_date - ensure timestamps are handled correctly
+        String formattedStartDate = "";
+        if (data['start_date'] != null) {
+          if (data['start_date'] is Timestamp) {
+            formattedStartDate = _formatTimestamp(data['start_date']);
+          } else {
+            // Handle non-Timestamp format if needed
+            print('Warning: start_date is not a Timestamp: ${data['start_date']}');
+          }
+        }
+        
+        String formattedEndDate = "";
+        if (data['end_date'] != null) {
+          if (data['end_date'] is Timestamp) {
+            formattedEndDate = _formatTimestamp(data['end_date']);
+          } else {
+            // Handle non-Timestamp format if needed
+            print('Warning: end_date is not a Timestamp: ${data['end_date']}');
+          }
+        }
+        
+        // Ensure price is a valid number
         double price = 0.0;
         if (data['price'] != null) {
           if (data['price'] is double) {
@@ -189,15 +212,16 @@ class FirestoreService {
       }).toList();
     } catch (e) {
       if (e.toString().contains("requires an index")) {
-        print("❗ Index required for fetching forecast prices: $e");
-        print("📢 You need to create a Firestore index for the price_entries collection.");
-        print("📢 Please click the link in the error message above or go to Firebase console.");
+        print("❗ fetchForecastPrices Error. Index required for fetching forecast prices: $e");
+        print("📢 fetchForecastPrices Error. You need to create a Firestore index for the price_entries collection.");
+        print("📢 fetchForecastPrices Error. Please click the link in the error message above or go to Firebase console.");
       } else {
         print("Error fetching forecast prices: $e");
       }
       return [];
     }
   }
+
   // Fetch the latest price for a commodity
   Future<Map<String, dynamic>?> fetchLatestPrice(String commodityId) async {
     try {
@@ -307,6 +331,154 @@ class FirestoreService {
     final date = timestamp.toDate();
     return "${date.month}/${date.day}/${date.year}";
   }  // Get most recent prices for all commodities (for homepage)
+
+  Future<Map<String, dynamic>> fetchAllForecastedPricesForChatbot() async {
+    try {
+      print("🔍 Fetching all forecasted prices for chatbot...");
+      Map<String, dynamic> results = {};
+      
+      // Get the forecasted price entries
+      final forecastQuery = await _db
+          .collection('price_entries')
+          .where('is_forecast', isEqualTo: true)
+          .orderBy('end_date') // Order by date ascending to get chronological order
+          .get()
+          .catchError((error) {
+            print("❌ Firestore query error: $error");
+            if (error.toString().contains("requires an index")) {
+              print("⚠️ fetchAllForecastedPricesForChatbot. This query requires a Firestore index. Please create it using the link in the error message.");
+            }
+            throw error; // Rethrow to be caught by the outer try-catch
+          });
+          
+      print("📊 Found ${forecastQuery.docs.length} forecasted price entries");
+      
+      // Organize forecasts by commodity
+      Map<String, List<Map<String, dynamic>>> forecastsByCommodity = {};
+      
+      // Process each document
+      for (var doc in forecastQuery.docs) {
+        final data = doc.data();
+        final commodityId = data['commodity_id'] as String?;
+        final endDate = data['end_date'] as Timestamp?;
+        
+        if (commodityId == null || endDate == null) {
+          print("⚠️ Skipping forecast entry with missing data: commodityId=$commodityId, endDate=$endDate");
+          continue;
+        }
+        
+        // Initialize the list for this commodity if it doesn't exist
+        if (!forecastsByCommodity.containsKey(commodityId)) {
+          forecastsByCommodity[commodityId] = [];
+        }
+        
+        // Format dates for display
+        String formattedStartDate = data['start_date'] != null ? 
+            _formatTimestamp(data['start_date']) : "";
+        
+        String formattedEndDate = _formatTimestamp(endDate);
+        
+        // Ensure price is a valid number
+        double price = 0.0;
+        if (data['price'] != null) {
+          if (data['price'] is double) {
+            price = data['price'];
+          } else if (data['price'] is num) {
+            price = (data['price'] as num).toDouble();
+          } else {
+            price = double.tryParse(data['price'].toString()) ?? 0.0;
+          }
+        }
+        
+        // Add forecast entry to the list for this commodity
+        forecastsByCommodity[commodityId]!.add({
+          'date': formattedEndDate,
+          'start_date': data['start_date'],
+          'end_date': endDate,
+          'formatted_start_date': formattedStartDate,
+          'formatted_end_date': formattedEndDate,
+          'price': price,
+          'source': data['source'] ?? '',
+          'timestamp': endDate, // Keep original timestamp for sorting
+        });
+      }
+      
+      // Sort forecast entries by date for each commodity
+      forecastsByCommodity.forEach((commodityId, forecasts) {
+        forecasts.sort((a, b) {
+          final aTimestamp = a['timestamp'] as Timestamp;
+          final bTimestamp = b['timestamp'] as Timestamp;
+          return aTimestamp.compareTo(bTimestamp); // Sort chronologically
+        });
+        
+        // Limit to at most 2 entries per commodity as specified
+        if (forecasts.length > 2) {
+          print("⚠️ Found ${forecasts.length} forecasts for commodity $commodityId, limiting to the first 2");
+          forecastsByCommodity[commodityId] = forecasts.sublist(0, 2);
+        }
+        
+        // Label forecasts as "next_week" and "two_weeks" where applicable
+        if (forecasts.length >= 1) {
+          forecastsByCommodity[commodityId]![0]['forecast_period'] = "Next Week";
+        }
+        
+        if (forecasts.length >= 2) {
+          forecastsByCommodity[commodityId]![1]['forecast_period'] = "Two Weeks";
+        }
+      });
+      
+      // Get commodity details to include names
+      final commoditiesSnapshot = await _db.collection('commodities').get();
+      Map<String, String> commodityNames = {};
+      
+      for (var doc in commoditiesSnapshot.docs) {
+        final data = doc.data();
+        if (data.containsKey('name')) {
+          commodityNames[doc.id] = data['name'];
+        }
+      }
+      
+      // Build final result structure
+      results = {
+        'success': true,
+        'forecast_data': forecastsByCommodity,
+        'commodity_names': commodityNames,
+        'count': forecastsByCommodity.length,
+        'timestamp': Timestamp.now(),
+        'formatted_date': _formatTimestamp(Timestamp.now()),
+      };
+      
+      // Debug output
+      print("✅ Successfully organized forecast data for ${forecastsByCommodity.length} commodities");
+      forecastsByCommodity.forEach((commodityId, forecasts) {
+        print("\n🔸 Commodity: $commodityId (${commodityNames[commodityId] ?? 'Unknown'})");
+        for (int i = 0; i < forecasts.length; i++) {
+          print("  ${i + 1}. ${forecasts[i]['forecast_period']}: ${forecasts[i]['formatted_end_date']} - ₱${forecasts[i]['price']}");
+        }
+      });
+      
+      return results;
+    } catch (e) {
+      print("❌ Error fetching forecasted prices for chatbot: $e");
+      
+      // Check if this is an index error and provide more helpful message
+      if (e.toString().contains("requires an index")) {
+        print("📢 IMPORTANT: You need to create a Firestore index for price_entries collection.");
+        print("📢 fetchAllForecastedPricesForChatbot. Please click the link in the error message above or go to Firebase console to create the required index.");
+      }
+      
+      return {
+        'success': false,
+        'error': e.toString(),
+        'forecast_data': {},
+        'commodity_names': {},
+        'count': 0,
+        'timestamp': Timestamp.now(),
+        'formatted_date': _formatTimestamp(Timestamp.now()),
+      };
+    }
+  }
+
   Future<Map<String, dynamic>> fetchAllLatestPrices({String forecastPeriod = "Now"}) async {
     try {
       print("🔄 Fetching all latest prices in a single query... (Forecast: $forecastPeriod)");
