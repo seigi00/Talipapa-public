@@ -5,10 +5,11 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
   static const String _filteredCommoditiesKey = 'cached_filtered_commodities';
   static const String _globalPriceDateKey = 'cached_global_price_date';
   static const String _lastFetchTimeKey = 'last_fetch_time';
-  static const String _selectedForecastKey = 'selected_forecast';
-  static const String _selectedCommodityKey = 'selected_commodity_details';
+  static const String _selectedForecastKey = 'selected_forecast';  static const String _selectedCommodityKey = 'selected_commodity_details';
   static const String _selectedSortKey = 'selected_sort';
   static const String _forecastStartDateKey = 'forecast_start_date';
+  // Keys for forecast-specific commodity selections
+  static const String _forecastCommodityKeyPrefix = 'forecast_commodity_';
   
   // Cache duration in minutes
   static const int _cacheDuration = 30; // 30 minutes by default
@@ -120,22 +121,42 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
       return false;
     }
   }
-    // Save selected commodity details
+  // Save selected commodity details  
   static Future<void> saveSelectedCommodityDetails(Map<String, dynamic> commodityDetails) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_selectedCommodityKey, jsonEncode(commodityDetails));
-      print('Saved selected commodity details to cache');
+      
+      // Also save commodity details for the current forecast
+      final currentForecast = await getSelectedForecast();
+      // currentForecast is never null (defaults to 'Now')
+      final forecastSpecificKey = _forecastCommodityKeyPrefix + currentForecast;
+      await prefs.setString(forecastSpecificKey, jsonEncode(commodityDetails));
+      print('Saved selected commodity details to cache for forecast: $currentForecast');
+      
+      print('Saved selected commodity details to global cache');
     } catch (e) {
       print('Error saving selected commodity details to cache: $e');
     }
   }
-  
-  // Get selected commodity details
+    // Get selected commodity details
   static Future<Map<String, dynamic>?> getSelectedCommodityDetails() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final jsonData = prefs.getString(_selectedCommodityKey);
+      final currentForecast = await getSelectedForecast();
+      String? jsonData;
+      
+      // First try to get forecast-specific selection
+      final forecastSpecificKey = _forecastCommodityKeyPrefix + currentForecast;
+      jsonData = prefs.getString(forecastSpecificKey);
+      
+      if (jsonData != null) {
+        print('Found forecast-specific commodity selection for: $currentForecast');
+        return Map<String, dynamic>.from(jsonDecode(jsonData));
+      }
+      
+      // Fall back to global selection
+      jsonData = prefs.getString(_selectedCommodityKey);
       
       if (jsonData == null) return null;
       
@@ -143,7 +164,7 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
     } catch (e) {
       print('Error getting selected commodity details from cache: $e');
       return null;
-    }  }  // Force refresh cache
+    }}// Force refresh cache
   static Future<void> invalidateCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();

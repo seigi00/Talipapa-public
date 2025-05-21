@@ -120,7 +120,7 @@ class _HomePageState extends State<HomePage> {
           setState(() {
             selectedCommodityId = commodityId;
           });
-          print("✅ Loaded selected commodity from cache: $commodityId");
+          print("✅ Loaded selected commodity from cache for forecast $selectedForecast: $commodityId");
         }
       }
     } catch (e) {
@@ -189,6 +189,13 @@ class _HomePageState extends State<HomePage> {
         String? filterToUse = await DataCache.getSelectedFilter("global");
         
         print("✅ Loaded global sort and filter settings: Sort=$sortToUse, Filter=$filterToUse");
+          // Load the commodity selection for this specific forecast view
+        final cachedCommodityDetails = await DataCache.getSelectedCommodityDetails();
+        String? commodityToSelect = null;
+        if (cachedCommodityDetails != null && cachedCommodityDetails.isNotEmpty) {
+          commodityToSelect = cachedCommodityDetails['id']?.toString();
+          print("✅ Loaded commodity selection for $forecastPeriod: $commodityToSelect");
+        }
         
         // Now set the state with the determined values
         setState(() {
@@ -200,6 +207,10 @@ class _HomePageState extends State<HomePage> {
           // Preserve existing sort/filter selections if they exist, otherwise use the loaded values
           selectedSort = selectedSort ?? sortToUse;
           selectedFilter = selectedFilter ?? filterToUse;
+          // Set the commodity selection for this forecast view
+          if (commodityToSelect != null) {
+            selectedCommodityId = commodityToSelect;
+          }
         });
         
         // Apply the sorting and filtering after the setState
@@ -897,14 +908,14 @@ class _HomePageState extends State<HomePage> {
                     globalPriceDate.isEmpty 
                         ? "Updating price data..." 
                         : selectedForecast == "Now"
-                            ? "Latest price watch data: $globalPriceDate"
+                            ? "Latest Price Watch Data: $globalPriceDate"
                             : selectedForecast == "Next Week"
                                 ? forecastStartDate.isEmpty
                                     ? "Forecast Prices for Next Week"
-                                    : "Forecast Prices for Next Week (Starting $forecastStartDate)"
+                                    : "Forecast Prices for this Week (Starting $forecastStartDate)"
                                 : forecastStartDate.isEmpty
                                     ? "Forecast Prices for Two Weeks"
-                                    : "Forecast Prices for Two Weeks (Starting $forecastStartDate)",
+                                    : "Forecast Prices Next Week (Starting $forecastStartDate)",
                     style: TextStyle(
                       color: kBlue,
                       fontSize: 12,
@@ -1260,12 +1271,12 @@ class _HomePageState extends State<HomePage> {
                                                     if (selectedForecast != "Now") {
                                                       // For forecast views, add labels to identify points
                                                       if (idx == 0) {
-                                                        dateText = "Latest";
+                                                        dateText = "Last";
                                                       } else if (forecastPeriod == "Next Week") {
                                                         // Use Week 1 for the Two Weeks view to prevent overflow
-                                                        dateText = selectedForecast == "Two Weeks" ? "Week 1" : "Next\nWeek";
+                                                        dateText = selectedForecast == "Two Weeks" ? "Current" : "Next\nWeek";
                                                       } else if (forecastPeriod == "Two Weeks") {
-                                                        dateText = "Week 2";
+                                                        dateText = "Next Week";
                                                       }
                                                     }
                                                     
@@ -1803,6 +1814,21 @@ class _HomePageState extends State<HomePage> {
               }
               if (currentFilter != null) {
                 await DataCache.saveSelectedFilter(currentFilter, "global");
+              }
+              
+              // Explicitly save selected commodity details, if any
+              if (currentCommodityId != null) {
+                final selectedCommodity = filteredCommodities.firstWhere(
+                  (c) => c['id'].toString() == currentCommodityId,
+                  orElse: () => commodities.firstWhere(
+                    (c) => c['id'].toString() == currentCommodityId,
+                    orElse: () => {},
+                  ),
+                );
+                
+                if (selectedCommodity.isNotEmpty) {
+                  await DataCache.saveSelectedCommodityDetails(selectedCommodity);
+                }
               }
               
               // Save selected forecast to cache immediately
