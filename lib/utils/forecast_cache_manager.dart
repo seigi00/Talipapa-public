@@ -85,7 +85,6 @@ class ForecastCacheManager {
       print("❌ Error saving forecast data to cache: $e");
     }
   }
-
   /// Invalidate specific forecast cache
   static Future<void> invalidateForecastCache(String forecastPeriod) async {
     try {
@@ -95,6 +94,23 @@ class ForecastCacheManager {
       print("🗑️ Invalidated cache for $forecastPeriod period");
     } catch (e) {
       print("❌ Error invalidating forecast cache: $e");
+    }
+  }
+  
+  /// Invalidate all forecast caches
+  static Future<void> invalidateAllForecasts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Invalidate cache for all forecast periods
+      for (final period in _forecastPeriods) {
+        final cacheKey = '${_baseKey}_$period';
+        await prefs.remove(cacheKey);
+      }
+      
+      print("🗑️ Invalidated all forecast period caches");
+    } catch (e) {
+      print("❌ Error invalidating all forecast caches: $e");
     }
   }
 

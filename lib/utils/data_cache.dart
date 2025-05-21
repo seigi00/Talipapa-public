@@ -8,6 +8,7 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
   static const String _selectedForecastKey = 'selected_forecast';
   static const String _selectedCommodityKey = 'selected_commodity_details';
   static const String _selectedSortKey = 'selected_sort';
+  static const String _forecastStartDateKey = 'forecast_start_date';
   
   // Cache duration in minutes
   static const int _cacheDuration = 30; // 30 minutes by default
@@ -149,12 +150,12 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
       final prefs = await SharedPreferences.getInstance();
       // Store sorting preference before invalidating cache
       final sortPreference = await getSelectedSort();
-      
-      // Remove all cache-related keys for a complete reset
+        // Remove all cache-related keys for a complete reset
       await prefs.remove(_lastFetchTimeKey);
       await prefs.remove(_commoditiesKey);
       await prefs.remove(_filteredCommoditiesKey);
       await prefs.remove(_globalPriceDateKey);
+      await prefs.remove(_forecastStartDateKey);
       
       // Restore sorting preference after cache reset
       if (sortPreference != null) {
@@ -189,6 +190,29 @@ class DataCache {  static const String _commoditiesKey = 'cached_commodities';
     } catch (e) {
       print('❌ Error getting selected sort from cache: $e');
       return null;
+    }
+  }
+
+  // Save forecast start date
+  static Future<void> saveForecastStartDate(String forecastStartDate) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_forecastStartDateKey, forecastStartDate);
+      print('✅ Saved forecast start date to cache: $forecastStartDate');
+    } catch (e) {
+      print('❌ Error saving forecast start date to cache: $e');
+    }
+  }
+  
+  // Get forecast start date
+  static Future<String> getForecastStartDate() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final startDate = prefs.getString(_forecastStartDateKey) ?? "";
+      return startDate;
+    } catch (e) {
+      print('❌ Error getting forecast start date from cache: $e');
+      return "";
     }
   }
 }

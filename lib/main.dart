@@ -16,7 +16,7 @@ import 'services/firestore_service.dart';
 import 'utils/debug_helper.dart';
 import 'utils/data_cache.dart';
 import 'utils/forecast_cache_manager.dart';
-import 'utils/forecast_debug.dart'; // New import for forecast debugging
+import 'utils/forecast_fix_helper.dart' as FixHelper; // Import for forecast fix helper
 import 'package:fl_chart/fl_chart.dart';
 
 void main() async {
@@ -47,6 +47,11 @@ class MyApp extends StatelessWidget {
 }
 
 class HomePage extends StatefulWidget {
+  final bool forceRefresh;
+  
+  // Constructor with optional forceRefresh parameter
+  const HomePage({Key? key, this.forceRefresh = false}) : super(key: key);
+  
   @override
   _HomePageState createState() => _HomePageState();
 }
@@ -72,12 +77,10 @@ class _HomePageState extends State<HomePage> {
   List<String> favoriteCommodities = [];
   List<String> displayedCommoditiesIds = []; // <-- Use IDs
   bool isHoldMode = false;
-  Set<String> heldCommodities = {};
-  String? deviceUUID;
+  Set<String> heldCommodities = {};  String? deviceUUID;
   String globalPriceDate = ""; // Store the latest global price date
-  bool _dataInitialized = false; // Track if data has been initialized
-  bool _fetchInProgress = false; // Track if a fetch operation is in progress
-  @override
+  String forecastStartDate = ""; // Store the forecast start date
+  bool _dataInitialized = false; // Track if data has been initialized@override
   void initState() {
     super.initState();
     _searchFocusNode.addListener(() {
@@ -90,7 +93,15 @@ class _HomePageState extends State<HomePage> {
     });
     _initializeUUID();
     _checkFirstLaunch();
-    loadCachedDataAndFetch();
+    
+    // Check if a forced refresh is requested
+    if (widget.forceRefresh) {
+      print("🔄 Force refresh requested from initState");
+      refreshDataFromFirestore();
+    } else {
+      loadCachedDataAndFetch();
+    }
+    
     loadDisplayedCommodities();
     loadFavorites();
     loadState();
@@ -135,6 +146,8 @@ class _HomePageState extends State<HomePage> {
       final cachedForecast = await DataCache.getSelectedForecast();
       final forecastPeriod = cachedForecast.isNotEmpty ? cachedForecast : "Now";
       
+      print("⚠️ DEBUG: Loading from cache for forecast period: $forecastPeriod");
+      
       // Load from forecast-specific cache for all periods including "Now"
       final forecastCache = await ForecastCacheManager.getCachedForecastData(forecastPeriod);
       if (forecastCache != null && forecastCache['commodities'] != null) {
@@ -144,16 +157,43 @@ class _HomePageState extends State<HomePage> {
         // Log forecast data to verify it's loaded correctly
         print("🔍 Loaded forecast commodities for $forecastPeriod: ${typedCommodities.length}");
         
+        // Debug log to check if forecasts have the correct period data
+        if (forecastPeriod != "Now") {
+          int forecastCount = 0;
+          int matchingPeriodCount = 0;
+          
+          for (var commodity in typedCommodities.take(3)) {
+            if (commodity['is_forecast'] == true) {
+              forecastCount++;
+              final period = commodity['forecast_period'] ?? 'Unknown';
+              if (period == forecastPeriod) {
+                matchingPeriodCount++;
+              }
+              print("⚠️ Sample forecast: ${commodity['id']} - Period: $period, Price: ${commodity['weekly_average_price']}");
+            }
+          }
+          
+          print("⚠️ DEBUG: Found $forecastCount forecasts, $matchingPeriodCount match $forecastPeriod period");
+        }
+        
         // Get filtered commodities from the cache
         final List<dynamic> tempFilteredCommodities = forecastCache['filteredCommodities'] ?? tempCommodities;
         final List<Map<String, dynamic>> typedFilteredCommodities = tempFilteredCommodities.map((item) => Map<String, dynamic>.from(item)).toList();
         
         // Update the UI
         final cachedSort = await DataCache.getSelectedSort();
+        
+        // Check if we need to load the forecast start date from the DataCache
+        String cachedForecastStartDate = "";
+        if (forecastPeriod != "Now") {
+          cachedForecastStartDate = await DataCache.getForecastStartDate();
+        }
+        
         setState(() {
           commodities = typedCommodities;
           filteredCommodities = typedFilteredCommodities;
           globalPriceDate = forecastCache['globalPriceDate'] ?? "";
+          forecastStartDate = forecastCache['forecastStartDate'] ?? cachedForecastStartDate;
           selectedForecast = forecastPeriod;
           selectedSort = forecastCache['selectedSort'] ?? cachedSort;
         });
@@ -209,7 +249,8 @@ class _HomePageState extends State<HomePage> {
     });
   }  // Store the last used forecast period to detect changes
   String _lastUsedForecast = "Now";
-    @override
+  
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
 
@@ -218,6 +259,7 @@ class _HomePageState extends State<HomePage> {
     // 2. When forecast period changes (_lastUsedForecast != selectedForecast)
     if (!_dataInitialized || _lastUsedForecast != selectedForecast) {
       print("🔄 Forecast changed from $_lastUsedForecast to $selectedForecast");
+      print("🧪 DEBUG: _dataInitialized=$_dataInitialized, cache will be checked");
       
       // Try to load from cache first if forecast period changed
       if (_lastUsedForecast != selectedForecast) {
@@ -225,36 +267,53 @@ class _HomePageState extends State<HomePage> {
           if (hasCachedForecast) {
             print("🔍 Found forecast data in cache for $selectedForecast, loading from cache");
             _loadFromCache().then((loadedFromCache) {
-              if (!loadedFromCache) {
-                // If cache loading failed, fetch from Firestore
-                print("❌ Failed to load from forecast cache, fetching from Firestore");
+              if (loadedFromCache) {
+                // Save the current forecast as the last used
+                _lastUsedForecast = selectedForecast;
+                print("✅ Successfully switched to $selectedForecast view from cache");
+                
+                // Debug log all forecast periods for currently selected commodity
+                if (selectedCommodityId != null) {
+                  print("🧪 DEBUG: Checking chart data for commodity $selectedCommodityId in $selectedForecast view");
+                  firestoreService.fetchWeeklyPrices(selectedCommodityId!).then((weeklyPrices) {
+                    final actualPrices = weeklyPrices.where((p) => p['is_forecast'] == false).toList();
+                    final forecastPrices = weeklyPrices.where((p) => p['is_forecast'] == true).toList();
+                    
+                    print("🧪 Found ${actualPrices.length} actual prices and ${forecastPrices.length} forecast prices");
+                    
+                    // Log forecast periods
+                    for (final forecast in forecastPrices) {
+                      final period = forecast['forecast_period'] ?? 'Unknown';
+                      final price = forecast['price'];
+                      final date = forecast['formatted_end_date'];
+                      print("🧪 Forecast: $period, Price: $price, Date: $date");
+                    }
+                  });
+                }
+              } else {                print("⚠️ Failed to load from cache for $selectedForecast, will fetch from Firestore");
                 fetchCommodities();
               }
             });
-          } else {
-            // No cache for this forecast period, fetch from Firestore
-            print("🔄 No forecast cache for $selectedForecast, fetching from Firestore");
+          } else {            print("⚠️ No cache found for $selectedForecast, will fetch from Firestore");
             fetchCommodities();
           }
-        });      } else {
-        // First load without a forecast change - still check cache first
-        print("🔄 First initialization - checking cache before fetching");
+        }).catchError((e) {          print("❌ Error checking forecast cache: $e");
+          fetchCommodities();
+        });
+      } else {
+        // First load, try cache first, then fetch
         _loadFromCache().then((loadedFromCache) {
-          if (!loadedFromCache) {
-            // If cache loading failed, fetch from Firestore
-            print("❌ No valid cache found on first load, fetching from Firestore");
+          if (!loadedFromCache) {            print("⚠️ No initial cache, fetching commodities");
             fetchCommodities();
           } else {
-            print("✅ Successfully loaded data from cache on first load");
+            print("✅ Loaded initial data from cache");
+            // Save the current forecast as the last used
+            _lastUsedForecast = selectedForecast;
           }
         });
       }
-      
-      _dataInitialized = true;
-      _lastUsedForecast = selectedForecast;
     } else {
-      // Just apply filter without fetching from Firestore
-      _applyFiltersOnly();
+      print("🔄 No forecast change detected, skipping fetch (still on $selectedForecast)");
     }
   }
   // Apply filters without fetching data from Firestore
@@ -321,11 +380,39 @@ class _HomePageState extends State<HomePage> {
       final globalDateInfo = await firestoreService.fetchLatestGlobalPriceDate();
       final String formattedGlobalDate = globalDateInfo['formattedDate'] ?? "";
       globalPriceDate = formattedGlobalDate; // Store for use in UI
-      
-      // STEP 2: Get all the latest prices in a single batch for all commodities
+        // STEP 2: Get all the latest prices in a single batch for all commodities
       print("🔄 Fetching all latest prices in one batch...");
       final allLatestPrices = await firestoreService.fetchAllLatestPrices(forecastPeriod: selectedForecast);
       print("✅ Fetched latest prices for ${allLatestPrices.length} commodities (Forecast: $selectedForecast)");
+        // For forecast views, determine the forecast start date
+      if (selectedForecast != "Now") {
+        // Look for the earliest forecast entry date for the selected period
+        Timestamp? earliestForecastDate;
+        
+        allLatestPrices.forEach((commodityId, priceData) {
+          // For "Next Week" view, only look at Next Week forecasts
+          // For "Two Weeks" view, prefer Next Week forecasts as the starting point
+          if (priceData['is_forecast'] == true && 
+             (priceData['forecast_period'] == selectedForecast || 
+              (selectedForecast == "Two Weeks" && priceData['forecast_period'] == "Next Week"))) {
+            final currentStartDate = priceData['start_date'] as Timestamp?;
+            if (currentStartDate != null) {
+              if (earliestForecastDate == null || currentStartDate.compareTo(earliestForecastDate!) < 0) {
+                earliestForecastDate = currentStartDate;
+              }
+            }
+          }
+        });
+        
+        // Format the forecast start date if we found one
+        if (earliestForecastDate != null) {
+          final date = earliestForecastDate!.toDate();
+          forecastStartDate = "${date.month}/${date.day}/${date.year}";
+          print("📅 Forecast start date: $forecastStartDate");
+        } else {
+          forecastStartDate = "";
+        }
+      }
       
       // Fetch all commodity documents from Firestore
       final querySnapshot = await _firestore.collection('commodities').get();
@@ -422,17 +509,22 @@ class _HomePageState extends State<HomePage> {
         }
       });
       
-    // Cache data after successful fetch
-      await DataCache.saveCommodities(commodities);
+    // Cache data after successful fetch      await DataCache.saveCommodities(commodities);
       await DataCache.saveFilteredCommodities(filteredCommodities);
       await DataCache.saveSelectedForecast(selectedForecast);
       await DataCache.saveGlobalPriceDate(globalPriceDate);
-      print("✅ Saved commodity data to cache");
-        // Save forecast data to specific forecast cache for all periods (including "Now")
+      
+      // Save forecast start date if applicable
+      if (selectedForecast != "Now" && forecastStartDate.isNotEmpty) {
+        await DataCache.saveForecastStartDate(forecastStartDate);
+      }
+      
+      print("✅ Saved commodity data to cache");// Save forecast data to specific forecast cache for all periods (including "Now")
       final forecastData = {
         'commodities': commodities,
         'filteredCommodities': filteredCommodities,
         'globalPriceDate': globalPriceDate,
+        'forecastStartDate': forecastStartDate,
         'selectedSort': selectedSort,
       };
       
@@ -736,53 +828,37 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
               )
-            else              Row(
-                children: [
-                  // Refresh button
-                  IconButton(
-                    icon: Icon(Icons.refresh, color: kBlue),
-                    onPressed: refreshDataFromFirestore,
-                    tooltip: 'Refresh data',
-                  ),
-                  // Force refresh button - always fetch from Firestore regardless of cache
-                  IconButton(
-                    icon: Icon(Icons.update, color: kBlue),
-                    onPressed: () {
-                      // Clear the forecast cache for the current period first
-                      ForecastCacheManager.invalidateForecastCache(selectedForecast).then((_) {
-                        // Then fetch from Firestore
-                        print("🔄 Forced refresh requested. Cache cleared for $selectedForecast");
-                        fetchCommodities();
-                      });
-                    },
-                    tooltip: 'Force refresh from Firestore',
-                  ),
-                  // Search button
-                  IconButton(
-                    icon: Icon(Icons.search, color: kBlue),
-                    onPressed: () {
-                      setState(() {
-                        isSearching = true; // Activate the search bar
-                      });
-                      _searchFocusNode.requestFocus(); // Automatically focus the search bar
-                    },
-                  ),
-                ],
+            else
+              // Search button only (no refresh buttons)
+              IconButton(
+                icon: Icon(Icons.search, color: kBlue),
+                onPressed: () {
+                  setState(() {
+                    isSearching = true; // Activate the search bar
+                  });
+                  _searchFocusNode.requestFocus(); // Automatically focus the search bar
+                },
               ),
           ],        ),
         body: Stack(
           children: [
-            Column(
-              children: [              // Global date display - left aligned
+            Column(              children: [              // Global date display - centered
                 Container(
                   width: double.infinity,
                   color: Colors.white,
-                  padding: EdgeInsets.only(left: 16, top: 8, bottom: 8),
-                  alignment: Alignment.centerLeft,
-                  child: Text(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  alignment: Alignment.center,                  child: Text(
                     globalPriceDate.isEmpty 
                         ? "Updating price data..." 
-                        : "Latest price watch data: $globalPriceDate",
+                        : selectedForecast == "Now"
+                            ? "Latest price watch data: $globalPriceDate"
+                            : selectedForecast == "Next Week"
+                                ? forecastStartDate.isEmpty
+                                    ? "Forecast Prices for Next Week"
+                                    : "Forecast Prices for Next Week (Starting $forecastStartDate)"
+                                : forecastStartDate.isEmpty
+                                    ? "Forecast Prices for Two Weeks"
+                                    : "Forecast Prices for Two Weeks (Starting $forecastStartDate)",
                     style: TextStyle(
                       color: kBlue,
                       fontSize: 12,
@@ -880,19 +956,14 @@ class _HomePageState extends State<HomePage> {
                                         ),
                                       ],
                                     );
-                                  }
-
-                                  // Sort by end_date to find the most recent price
+                                  }                                  // Sort by end_date to find the most recent price
                                   actualPrices.sort((a, b) {
                                     final aDate = a['end_date'] as Timestamp;
                                     final bDate = b['end_date'] as Timestamp;
                                     return bDate.compareTo(aDate); // Sort descending (most recent first)
                                   });
                                   
-                                  // Get the most recent date and price
-                                  final latestPrice = actualPrices.first; // First item after descending sort
-                                  final price = latestPrice['price'] ?? 0.0;
-                                  final formattedDate = latestPrice['formatted_end_date'] ?? "-";                                  // Prepare the display prices based on selected forecast view
+                                  // Prepare the display prices based on selected forecast view
                                   List<Map<String, dynamic>> displayPrices = [];
                                     if (selectedForecast == "Now") {
                                     // For "Now", show past two weeks of actual prices
@@ -911,86 +982,152 @@ class _HomePageState extends State<HomePage> {
                                       displayPrices = List.from(actualPrices);
                                     }
                                     
-                                    print("📈 NOW view: Showing ${displayPrices.length} actual prices");
-                                  } else if (selectedForecast == "Next Week") {
-                                    // For "Next Week", show current price and one-week forecast only
+                                    print("📈 NOW view: Showing ${displayPrices.length} actual prices");                                  } else if (selectedForecast == "Next Week") {
+                                    // For "Next Week", we need to show ONLY latest non-forecast price TO the one-week forecast
                                     displayPrices = [];
                                     
                                     // Add the most recent actual price
                                     if (actualPrices.isNotEmpty) {
                                       displayPrices.add(actualPrices.first); // Already sorted to have most recent first
-                                    }                                    // Add one-week forecast (explicitly filter by forecast_period)
-                                    final oneWeekForecasts = snapshot.data!
-                                        .where((p) => p['is_forecast'] == true && p['forecast_period'] == "Next Week")
-                                        .toList();
-                                          print("📊 Found ${oneWeekForecasts.length} specific 'Next Week' forecasts");
+                                    }                                    
                                     
-                                    // Debug forecast assignments
-                                    ForecastDebugHelper.verifyChronologicalAssignment(
-                                      snapshot.data!.where((p) => p['is_forecast'] == true).toList()
-                                    );
+                                    // Find forecasts for the Next Week period
+                                    final allForecasts = snapshot.data!.where((p) => p['is_forecast'] == true).toList();
                                     
-                                    if (oneWeekForecasts.isNotEmpty) {
-                                      // Sort forecasts by date
-                                      oneWeekForecasts.sort((a, b) {
+                                    // Debug log all forecasts for this commodity
+                                    print("\n🔎 DEBUG - All forecasts for commodity ${selectedCommodityId}:");
+                                    for (var f in allForecasts) {
+                                      print("  - Date: ${f['formatted_end_date']}, Period: ${f['forecast_period'] ?? 'MISSING'}, Price: ${f['price']}");
+                                    }
+                                    
+                                    // Check if any forecast periods are missing
+                                    bool needsForecastPeriodFix = false;
+                                    for (var f in allForecasts) {
+                                      if (f['forecast_period'] == null || f['forecast_period'].toString().isEmpty) {
+                                        needsForecastPeriodFix = true;
+                                        print("⚠️ Found forecast with missing period: ${f['formatted_end_date']}, Price: ${f['price']}");
+                                      }
+                                    }
+                                    
+                                    List<Map<String, dynamic>> nextWeekForecasts = [];
+                                    
+                                    // Fix missing forecast periods if needed
+                                    if (needsForecastPeriodFix) {
+                                      print("🔧 Fixing missing forecast periods for commodity ${selectedCommodityId}");
+                                        // Use the forecast helper to fix periods
+                                      final fixedData = FixHelper.ForecastDebugHelper.ensureForecastPeriodsExist(snapshot.data!);
+                                      
+                                      // Get the fixed forecasts
+                                      final fixedForecasts = fixedData.where((p) => p['is_forecast'] == true).toList();
+                                      
+                                      // Get Next Week forecasts
+                                      nextWeekForecasts = fixedForecasts.where((p) => 
+                                          p['forecast_period'] == "Next Week").toList();
+                                      
+                                      print("📊 After fix: Found ${nextWeekForecasts.length} 'Next Week' forecasts");
+                                    } else {
+                                      // If no fix needed, get forecasts normally
+                                      nextWeekForecasts = allForecasts.where((p) => 
+                                          p['forecast_period'] == "Next Week").toList();
+                                    }
+                                    
+                                    if (nextWeekForecasts.isNotEmpty) {
+                                      // Sort by date (ascending)
+                                      nextWeekForecasts.sort((a, b) {
                                         final aDate = a['end_date'] as Timestamp;
                                         final bDate = b['end_date'] as Timestamp;
                                         return aDate.compareTo(bDate);
-                                      });                                      // Add first next week forecast
-                                      displayPrices.add(oneWeekForecasts.first);
-                                      print("🔮 Added 'Next Week' forecast: ${oneWeekForecasts.first['price']} for date ${oneWeekForecasts.first['formatted_end_date']}");
+                                      });
                                       
-                                      // Additional debugging information
-                                      print("🔍 Forecast details - ID: ${oneWeekForecasts.first['commodity_id']}, Period: ${oneWeekForecasts.first['forecast_period']}");
+                                      // Add the Next Week forecast to the display
+                                      displayPrices.add(nextWeekForecasts.first);
+                                      
+                                      print("📈 NEXT WEEK view: Added forecast price: ${nextWeekForecasts.first['price']} for ${nextWeekForecasts.first['formatted_end_date']}");
                                     } else {
-                                      print("⚠️ No 'Next Week' forecasts found");
-                                    }// Print what we're displaying
-                                    print("📈 NEXT WEEK view: Showing ${displayPrices.length} prices (${displayPrices.where((p) => p['is_forecast'] == true).length} forecasts)");
-                                    
-                                    // Log all forecast periods for debugging
-                                    final allForecasts = snapshot.data!.where((p) => p['is_forecast'] == true).toList();
-                                    print("\n📊 DEBUG: All Forecasts:");
-                                    for (var forecast in allForecasts) {
-                                      print("🔮 Commodity ID: ${forecast['commodity_id']}, Period: ${forecast['forecast_period']}, Date: ${forecast['formatted_end_date']}, Price: ${forecast['price']}");
+                                      print("⚠️ No 'Next Week' forecasts found for this commodity");
                                     }
+                                    
+                                    print("📈 NEXT WEEK view: Showing ${displayPrices.length} prices (actual + Next Week forecast)");
                                   } else {
-                                    // For "Two Weeks", show current + one-week + two-weeks forecasts
+                                    // For "Two Weeks", we need to show latest -> Next Week -> Two Weeks (all three points)
                                     displayPrices = [];
                                     
                                     // Add the most recent actual price
                                     if (actualPrices.isNotEmpty) {
                                       displayPrices.add(actualPrices.first);
-                                    }                                    // Add all forecast prices
-                                    final forecastPrices = snapshot.data!
-                                        .where((p) => p['is_forecast'] == true)
-                                        .toList();
-                                    
-                                    // Filter to specific forecast period
-                                    final periodForecasts = forecastPrices
-                                        .where((p) => p['forecast_period'] == "Two Weeks")
-                                        .toList();
-                                      
-                                    // Sort forecasts by date
-                                    periodForecasts.sort((a, b) {
-                                      final aDate = a['end_date'] as Timestamp;
-                                      final bDate = b['end_date'] as Timestamp;
-                                      return aDate.compareTo(bDate);
-                                    });
-                                    
-                                    print("📊 Found ${periodForecasts.length} specific 'Two Weeks' forecasts");
-                                    print("📊 Total forecast entries: ${forecastPrices.length}");
-                                    print("📊 Forecast distribution: ${forecastPrices.where((p) => p['forecast_period'] == 'Next Week').length} Next Week, ${forecastPrices.where((p) => p['forecast_period'] == 'Two Weeks').length} Two Weeks");
-                                      // Add forecasts (use period-specific forecasts)
-                                    if (periodForecasts.isNotEmpty) {                                      // Add just the first Two Weeks forecast
-                                      displayPrices.add(periodForecasts.first);
-                                      print("🔮 Added 'Two Weeks' forecast: ${periodForecasts.first['price']} for date ${periodForecasts.first['formatted_end_date']}");
-                                      print("🔍 Forecast details - ID: ${periodForecasts.first['commodity_id']}, Period: ${periodForecasts.first['forecast_period']}");
-                                    } else {
-                                      print("⚠️ No 'Two Weeks' forecasts found");
+                                      print("📈 TWO WEEKS view: Added latest actual price: ${actualPrices.first['price']} for ${actualPrices.first['formatted_end_date']}");
                                     }
                                     
-                                    // Print what we're displaying
-                                    print("📈 TWO WEEKS view: Showing ${displayPrices.length} prices (${displayPrices.where((p) => p['is_forecast'] == true).length} forecasts)");
+                                    // Get all forecast prices
+                                    final allForecasts = snapshot.data!.where((p) => p['is_forecast'] == true).toList();
+                                    
+                                    // Check if any forecast periods are missing and fix them if needed
+                                    bool needsForecastPeriodFix = false;
+                                    for (var f in allForecasts) {
+                                      final period = f['forecast_period'];
+                                      if (period == null || period.toString().isEmpty) {
+                                        needsForecastPeriodFix = true;
+                                        print("⚠️ Found forecast with missing period: ${f['formatted_end_date']}, Price: ${f['price']}");
+                                      }
+                                    }
+                                    
+                                    List<Map<String, dynamic>> fixedData = snapshot.data!;
+                                    List<Map<String, dynamic>> nextWeekForecasts = [];
+                                    List<Map<String, dynamic>> twoWeeksForecasts = [];
+                                    
+                                    // Fix forecast periods if needed
+                                    if (needsForecastPeriodFix) {                                      print("🔧 Fixing missing forecast periods for commodity ${selectedCommodityId}");
+                                      fixedData = FixHelper.ForecastDebugHelper.ensureForecastPeriodsExist(snapshot.data!);
+                                      
+                                      // Get fixed forecasts
+                                      final fixedForecasts = fixedData.where((p) => p['is_forecast'] == true).toList();
+                                      
+                                      // Get Next Week and Two Weeks forecasts
+                                      nextWeekForecasts = fixedForecasts.where((p) => 
+                                          p['forecast_period'] == "Next Week").toList();
+                                      
+                                      twoWeeksForecasts = fixedForecasts.where((p) => 
+                                          p['forecast_period'] == "Two Weeks").toList();
+                                      
+                                      print("📊 After fix: Found ${nextWeekForecasts.length} Next Week and ${twoWeeksForecasts.length} Two Weeks forecasts");
+                                    } else {
+                                      // If no fix needed, get forecasts normally
+                                      nextWeekForecasts = allForecasts.where((p) => 
+                                          p['forecast_period'] == "Next Week").toList();
+                                      
+                                      twoWeeksForecasts = allForecasts.where((p) => 
+                                          p['forecast_period'] == "Two Weeks").toList();
+                                    }
+                                    
+                                    // First add Next Week forecast if available
+                                    if (nextWeekForecasts.isNotEmpty) {
+                                      // Sort by date (ascending)
+                                      nextWeekForecasts.sort((a, b) {
+                                        final aDate = a['end_date'] as Timestamp;
+                                        final bDate = b['end_date'] as Timestamp;
+                                        return aDate.compareTo(bDate);
+                                      });
+                                      
+                                      // Add the Next Week forecast
+                                      displayPrices.add(nextWeekForecasts.first);
+                                      print("📈 TWO WEEKS view: Added Next Week forecast: ${nextWeekForecasts.first['price']} for ${nextWeekForecasts.first['formatted_end_date']}");
+                                    }
+                                    
+                                    // Then add Two Weeks forecast if available
+                                    if (twoWeeksForecasts.isNotEmpty) {
+                                      // Sort by date (ascending)
+                                      twoWeeksForecasts.sort((a, b) {
+                                        final aDate = a['end_date'] as Timestamp;
+                                        final bDate = b['end_date'] as Timestamp;
+                                        return aDate.compareTo(bDate);
+                                      });
+                                      
+                                      // Add the Two Weeks forecast
+                                      displayPrices.add(twoWeeksForecasts.first);
+                                      print("📈 TWO WEEKS view: Added Two Weeks forecast: ${twoWeeksForecasts.first['price']} for ${twoWeeksForecasts.first['formatted_end_date']}");
+                                    }
+                                    
+                                    print("📈 TWO WEEKS view: Showing ${displayPrices.length} points (actual + Next Week + Two Weeks)");
                                   }
 
                                   // Create chart spots
@@ -999,31 +1136,7 @@ class _HomePageState extends State<HomePage> {
                                     final price = double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0;
                                     spots.add(FlSpot(i.toDouble(), price));
                                   }                                  return Column(
-                                    children: [                                      // Add "As of" date above the chart with nicer styling
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                                        margin: const EdgeInsets.only(bottom: 8),
-                                        decoration: BoxDecoration(
-                                          color: kBlue.withOpacity(0.07),
-                                          borderRadius: BorderRadius.circular(20),
-                                          border: Border.all(color: kBlue.withOpacity(0.2), width: 0.8),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min, // Compact size for centered row
-                                          children: [
-                                            Icon(Icons.calendar_today, size: 12, color: kBlue.withOpacity(0.7)),
-                                            SizedBox(width: 4),
-                                            Text(
-                                              "As of: $formattedDate",
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                color: kBlue.withOpacity(0.9),
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
+                                    children: [
                                       Expanded(
                                         child: LineChart(                                          LineChartData(
                                             lineBarsData: [
@@ -1099,17 +1212,28 @@ class _HomePageState extends State<HomePage> {
                                                   getTitlesWidget: (value, meta) {
                                                     int idx = value.toInt();
                                                     if (idx < 0 || idx >= displayPrices.length) return Container();
-                                                    
-                                                    // Get date from timestamp
+                                                      // Get date from timestamp
                                                     final endDate = displayPrices[idx]['end_date'] as Timestamp;
                                                     final date = endDate.toDate();
                                                     
                                                     // Different format if it's a forecast
                                                     final isForecast = displayPrices[idx]['is_forecast'] == true;
-                                                    final dateText = "${date.month}/${date.day}";
+                                                    final forecastPeriod = displayPrices[idx]['forecast_period'] ?? '';                                                    // Create date text with indicator for what type of point it is
+                                                    String dateText = "${date.month}/${date.day}";
+                                                    if (selectedForecast != "Now") {
+                                                      // For forecast views, add labels to identify points
+                                                      if (idx == 0) {
+                                                        dateText = "Latest";
+                                                      } else if (forecastPeriod == "Next Week") {
+                                                        // Use Week 1 for the Two Weeks view to prevent overflow
+                                                        dateText = selectedForecast == "Two Weeks" ? "Next Week" : "Next\nWeek";
+                                                      } else if (forecastPeriod == "Two Weeks") {
+                                                        dateText = "Two Weeks";
+                                                      }
+                                                    }
                                                     
-                                                    // Only show every other date if more than 3 dates
-                                                    if (displayPrices.length > 3 && idx % 2 != 0 && idx != displayPrices.length - 1) {
+                                                    // Only show every other date if more than 3 dates and in "Now" view
+                                                    if (selectedForecast == "Now" && displayPrices.length > 3 && idx % 2 != 0 && idx != displayPrices.length - 1) {
                                                       return Container(); // Skip every other date
                                                     }
                                                       return Padding(
@@ -1185,8 +1309,23 @@ class _HomePageState extends State<HomePage> {
                                                     final date = timestamp.toDate();
                                                     final dateText = "${date.month}/${date.day}/${date.year}";
                                                     
+                                                    String forecastType = "";
+                                                    String daysDifference = "";
+                                                    
+                                                    if (isForecast && displayPrices.length > 1 && idx > 0) {
+                                                      // Determine which forecast period this is
+                                                      forecastType = displayPrices[idx]['forecast_period'] ?? 'Forecast';
+                                                      
+                                                      // Calculate days difference between latest price and forecast
+                                                      if (displayPrices[0]['end_date'] != null) {
+                                                        final latestDate = (displayPrices[0]['end_date'] as Timestamp).toDate();
+                                                        final difference = date.difference(latestDate).inDays;
+                                                        daysDifference = " ($difference days from latest)";
+                                                      }
+                                                    }
+                                                    
                                                     return LineTooltipItem(
-                                                      "${isForecast ? '(Forecast) ' : ''}₱${price.toStringAsFixed(2)}\n$dateText",
+                                                      "${isForecast ? '($forecastType)' : 'Latest'} ₱${price.toStringAsFixed(2)}\n$dateText${daysDifference}",
                                                       TextStyle(
                                                         color: isForecast ? kPink : kBlue,
                                                         fontWeight: FontWeight.bold,
@@ -1211,16 +1350,88 @@ class _HomePageState extends State<HomePage> {
                                               offset: Offset(0, 1),
                                             ),
                                           ],
-                                        ),
-                                        margin: const EdgeInsets.only(top: 8.0),                                        child: Column(
+                                        ),                                        margin: const EdgeInsets.only(top: 8.0),
+                                        child: Column(
                                           children: [                                            Text(
-                                              "${selectedForecast == 'Now' ? 'Latest price' : selectedForecast + ' price'}: ₱${price is double ? price.toStringAsFixed(2) : (double.tryParse(price.toString()) ?? 0.0).toStringAsFixed(2)}",
+                                              "Price Trends",
                                               style: TextStyle(
                                                 fontSize: 16,
                                                 color: kBlue,
                                                 fontWeight: FontWeight.bold,
                                               ),
-                                            ),
+                                            ),                                            // Add specific price values when in forecast modes
+                                            if (selectedForecast != "Now" && displayPrices.length > 1)
+                                              Padding(
+                                                padding: const EdgeInsets.only(top: 5.0),
+                                                child: Row(
+                                                  mainAxisAlignment: MainAxisAlignment.center,
+                                                  children: [
+                                                    // For Two Weeks view, only show Latest and Two Weeks forecasts
+                                                    if (selectedForecast == "Two Weeks")
+                                                      for (int i = 0; i < displayPrices.length; i++)
+                                                        if (i == 0 || displayPrices[i]['forecast_period'] == "Two Weeks")
+                                                          Padding(
+                                                            padding: const EdgeInsets.symmetric(horizontal: 5.0),
+                                                            child: Row(
+                                                              mainAxisSize: MainAxisSize.min,
+                                                              children: [
+                                                                Container(
+                                                                  width: 8,
+                                                                  height: 8,
+                                                                  decoration: BoxDecoration(
+                                                                    shape: BoxShape.circle,
+                                                                    color: displayPrices[i]['is_forecast'] == true ? kPink : kBlue,
+                                                                  ),
+                                                                ),
+                                                                SizedBox(width: 3),
+                                                                Text(
+                                                                  i == 0 
+                                                                    ? "Latest: ₱${(double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0).toStringAsFixed(2)}"
+                                                                    : displayPrices[i]['forecast_period'] == "Two Weeks"
+                                                                      ? "Two Weeks: ₱${(double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0).toStringAsFixed(2)}"
+                                                                      : "${displayPrices[i]['forecast_period'] ?? 'Forecast'}: ₱${(double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0).toStringAsFixed(2)}",
+                                                                  style: TextStyle(
+                                                                    fontSize: 12,
+                                                                    color: displayPrices[i]['is_forecast'] == true ? kPink : kBlue,
+                                                                    fontWeight: FontWeight.w500,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                    // For other views, show all forecast points
+                                                    if (selectedForecast != "Two Weeks")
+                                                      for (int i = 0; i < displayPrices.length; i++)
+                                                        Padding(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 5.0),
+                                                          child: Row(
+                                                            mainAxisSize: MainAxisSize.min,
+                                                            children: [
+                                                              Container(
+                                                                width: 8,
+                                                                height: 8,
+                                                                decoration: BoxDecoration(
+                                                                  shape: BoxShape.circle,
+                                                                  color: displayPrices[i]['is_forecast'] == true ? kPink : kBlue,
+                                                                ),
+                                                              ),
+                                                              SizedBox(width: 3),
+                                                              Text(
+                                                                i == 0 
+                                                                  ? "Latest: ₱${(double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0).toStringAsFixed(2)}"
+                                                                  : "${displayPrices[i]['forecast_period'] ?? 'Forecast'}: ₱${(double.tryParse(displayPrices[i]['price'].toString()) ?? 0.0).toStringAsFixed(2)}",
+                                                                style: TextStyle(
+                                                                  fontSize: 12,
+                                                                  color: displayPrices[i]['is_forecast'] == true ? kPink : kBlue,
+                                                                  fontWeight: FontWeight.w500,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                  ],
+                                                ),
+                                              ),
                                           ],
                                         ),
                                       ),
@@ -1594,8 +1805,7 @@ class _HomePageState extends State<HomePage> {
               ),            ),
           ),
         ),
-      ),
-    );
+      ));
   }
   Widget _buildCommodityItem(Map<String, dynamic> commodity, {required bool isSelected, required bool isHeld, required int index}) {
     final String commodityId = commodity['id'].toString();
@@ -1741,8 +1951,7 @@ class _HomePageState extends State<HomePage> {
             ),
           ],
         ),
-      ),
-    );
+      ));
   }
   List<String> getAllCommodities() {
     List<String> allCommodities = [];
