@@ -318,7 +318,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
           final name = COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? 'Unknown';
           final specification = COMMODITY_ID_TO_DISPLAY[commodityId]?['specification'] ?? 'Unknown';
           final unit = COMMODITY_ID_TO_DISPLAY[commodityId]?['unit'] ?? 'Unknown';
-          buffer.writeln("\n Commodity: $name");
+          buffer.writeln("\nCommodity: $name");
           buffer.writeln("Specification: $specification");
           for (int i = 0; i < forecasts.length; i++) {
             final forecast = forecasts[i];
