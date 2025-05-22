@@ -955,23 +955,55 @@ class _HomePageState extends State<HomePage> {
                   width: double.infinity,
                   color: Colors.white,
                   padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  alignment: Alignment.center,                  child: Text(
-                    globalPriceDate.isEmpty 
-                        ? "Updating price data..." 
-                        : selectedForecast == "Now"
-                            ? "Latest Price Watch Data: $globalPriceDate"
-                            : selectedForecast == "Next Week"
-                                ? forecastStartDate.isEmpty
-                                    ? "Forecast Prices for Next Week"
-                                    : "Forecasted Prices for this Week (Starting $forecastStartDate)"
-                                : forecastStartDate.isEmpty
-                                    ? "Forecast Prices for Two Weeks"
-                                    : "Forecasted Prices for Next Week (Starting $forecastStartDate)",
-                    style: TextStyle(
-                      color: kBlue,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
+                  alignment: Alignment.center,
+                  child: Column(
+                    children: [
+                      Text(
+                        globalPriceDate.isEmpty 
+                            ? "Updating price data..." 
+                            : selectedForecast == "Now"
+                                ? "Latest Price Watch Data: $globalPriceDate"
+                                : selectedForecast == "Next Week"
+                                    ? forecastStartDate.isEmpty
+                                        ? "Forecast Prices for Next Week"
+                                        : "Forecasted Prices for this Week (Starting $forecastStartDate)"
+                                    : forecastStartDate.isEmpty
+                                        ? "Forecast Prices for Two Weeks"
+                                        : "Forecasted Prices for Next Week (Starting $forecastStartDate)",
+                        style: TextStyle(
+                          color: kBlue,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      // Source indicator with styling based on forecast type
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: selectedForecast == "Now" 
+                              ? kGreen.withOpacity(0.1) 
+                              : kPink.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: selectedForecast == "Now" 
+                                ? kGreen.withOpacity(0.3) 
+                                : kPink.withOpacity(0.3), 
+                            width: 1
+                          ),
+                        ),
+                        child: Text(
+                          selectedForecast == "Now" 
+                              ? "Source: Department of Agriculture" 
+                              : "Source: Talipapa Forecast",
+                          style: TextStyle(
+                            fontWeight: FontWeight.w500,
+                            fontSize: 11,
+                            color: selectedForecast == "Now" ? kGreen : kPink,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 // No space or margin between containers
@@ -1329,7 +1361,7 @@ class _HomePageState extends State<HomePage> {
                                                         // Use Week 1 for the Two Weeks view to prevent overflow
                                                         dateText = selectedForecast == "Two Weeks" ? "Current" : "Current";
                                                       } else if (forecastPeriod == "Two Weeks") {
-                                                        dateText = "Next Week";
+                                                        dateText = "Next Wk";
                                                       }
                                                     }
                                                     
@@ -1458,7 +1490,7 @@ class _HomePageState extends State<HomePage> {
                                             Text(
                                               "Price Trend",
                                               style: TextStyle(
-                                                fontSize: 11, // Reduced from 13
+                                                fontSize: 13, // Reduced from 13
                                                 color: kBlue,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -1562,7 +1594,7 @@ class _HomePageState extends State<HomePage> {
                                 children: [
                                   _forecastButton("Now", displayText: "Last Week"),
                                   SizedBox(width: 8), // Reduced spacing between buttons
-                                  _forecastButton("Next Week", displayText: "Now"),
+                                  _forecastButton("Next Week", displayText: "Current"),
                                   SizedBox(width: 8), // Reduced spacing between buttons
                                   _forecastButton("Two Weeks", displayText: "Next Week"),
                                 ],
@@ -1834,7 +1866,7 @@ class _HomePageState extends State<HomePage> {
         bottomNavigationBar: CustomBottomNavBar(), // Use the reusable bottom navigation bar
       ),
     );
-  }  Widget _forecastButton(String identifier, {String? displayText, double height = 25}) {
+  }  Widget _forecastButton(String identifier, {String? displayText, double height = 23}) {
     final textToDisplay = displayText ?? identifier;
     
     return ConstrainedBox(
