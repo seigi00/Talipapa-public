@@ -1904,6 +1904,7 @@ class _HomePageState extends State<HomePage> {
   }
   Widget _buildCommodityItem(Map<String, dynamic> commodity, {required bool isSelected, required bool isHeld, required int index}) {
     final String commodityId = commodity['id'].toString();
+    final String commoditySource = commodity['source'].toString();
     
     // Use your mapping for display name and other details
     final display = COMMODITY_ID_TO_DISPLAY[commodityId] ?? {};
