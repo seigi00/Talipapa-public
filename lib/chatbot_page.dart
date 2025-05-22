@@ -311,8 +311,6 @@ class _ChatbotPageState extends State<ChatbotPage> {
       if (_forecastedPrices['success'] == true) {
         final Map<String, List<dynamic>> forecastedPrices =
             Map<String, List<dynamic>>.from(_forecastedPrices['forecast_data']);
-        final Map<String, String> commodityNames =
-            Map<String, String>.from(_forecastedPrices['commodity_names']);
 
         buffer.writeln("✅ Successfully organized forecast data for ${forecastedPrices.length} commodities");
 
