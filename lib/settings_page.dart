@@ -166,7 +166,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 style: TextStyle(fontSize: 18, color: textColor),
               ),
               subtitle: Text(
-                "If the list or graph is not loading properly, manually fetch data to reset cache",
+                "If the list or graph is not loading properly, manually fetch data to reset cache. This will increase time loading between pages.",
                 style: TextStyle(fontSize: 12, color: textColor.withOpacity(0.7)),
               ),
               onTap: () {

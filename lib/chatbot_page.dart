@@ -514,31 +514,32 @@ class _ChatbotPageState extends State<ChatbotPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: PreferredSize(
-        preferredSize: Size.fromHeight(100), // Increased header height
+        preferredSize: Size.fromHeight(100), // Keep the existing header height
         child: AppBar(
           backgroundColor: kGreen,
-          title: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              SvgPicture.asset(
-                'assets/icons/ic_fishchatbot.svg',
-                height: 28,
-                colorFilter: ColorFilter.mode(kBlue, BlendMode.srcIn),
-              ), // Fish icon
-              SizedBox(height: 8), // Increased spacing
-              Text(
-                "Talipapa Chat",
-                style: TextStyle(
-                  fontFamily: 'Raleway',
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: kBlue,
+          flexibleSpace: SafeArea(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.end, // Align content to bottom
+              children: [
+                SvgPicture.asset(
+                  'assets/icons/ic_fishchatbot.svg',
+                  height: 28,
+                  colorFilter: ColorFilter.mode(kBlue, BlendMode.srcIn),
                 ),
-              ),
-            ],
+                SizedBox(height: 8),
+                Text(
+                  "Talipapa Chat",
+                  style: TextStyle(
+                    fontFamily: 'Raleway',
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: kBlue,
+                  ),
+                ),
+                SizedBox(height: 12), // Add bottom padding
+              ],
+            ),
           ),
-          centerTitle: true, // Center the title and icon
-          // Add refresh button to manually update prices
           actions: [
             IconButton(
               icon: Icon(Icons.refresh, color: kBlue),
