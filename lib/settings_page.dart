@@ -13,32 +13,15 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  bool notificationsEnabled = true; // Default value for notifications
-
   @override
   void initState() {
     super.initState();
-    loadSettings(); // Load saved settings
+    // No settings to load initially
   }
-
-  Future<void> loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      notificationsEnabled = prefs.getBool('notificationsEnabled') ?? true;
-    });
-  }
-
-  Future<void> saveSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('notificationsEnabled', notificationsEnabled);
-  }
-
   Future<void> resetData() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear(); // Clear all saved data
-    setState(() {
-      notificationsEnabled = true;
-    });
+    
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text("All data has been reset.")),
     );
@@ -123,15 +106,16 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final backgroundColor = kGreen; // Static background color
-    final textColor = kBlue; // Static text color
+    final backgroundColor = kGreen;
+    final textColor = kBlue;
 
     return Scaffold(
       backgroundColor: backgroundColor,
       appBar: AppBar(
         backgroundColor: backgroundColor,
         elevation: 0,
-        centerTitle: true,        title: Center( // Center the "Settings" header horizontally
+        centerTitle: true,
+        title: Center(
           child: Text(
             "Settings",
             style: TextStyle(color: textColor, fontFamily: 'Raleway', fontSize: 24, fontWeight: FontWeight.bold),
@@ -142,22 +126,8 @@ class _SettingsPageState extends State<SettingsPage> {
         padding: EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [            // Notifications Toggle
-            ListTile(
-              title: Text(
-                "Notifications",
-                style: TextStyle(fontSize: 18, color: textColor),
-              ),
-              trailing: Switch(
-                value: notificationsEnabled,
-                onChanged: (bool value) {
-                  setState(() {
-                    notificationsEnabled = value;
-                  });
-                  saveSettings(); // Save the updated setting
-                },
-              ),
-            ),
+          children: [
+            // Removed the Notifications Toggle
             
             // Manually Fetch Data
             ListTile(
@@ -170,7 +140,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 style: TextStyle(fontSize: 12, color: textColor.withOpacity(0.7)),
               ),
               onTap: () {
-                manuallyFetchData(); // Fetch fresh data
+                manuallyFetchData();
               },
             ),
             
@@ -181,7 +151,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 style: TextStyle(fontSize: 18, color: textColor),
               ),
               onTap: () {
-                showResetConfirmationDialog(); // Show confirmation dialog
+                showResetConfirmationDialog();
               },
             ),
             ListTile(
@@ -195,7 +165,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   barrierDismissible: false,
                   builder: (context) => TutorialOverlay(
                     onClose: () => Navigator.of(context).pop(),
-                    showFromSettings: true, // Add this parameter to TutorialOverlay
+                    showFromSettings: true,
                   ),
                 );
               },
@@ -203,7 +173,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
       ),
-      bottomNavigationBar: CustomBottomNavBar(), // Re-added the bottom navigation bar
+      bottomNavigationBar: CustomBottomNavBar(),
     );
   }
 }

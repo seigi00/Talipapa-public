@@ -508,11 +508,21 @@ class _HomePageState extends State<HomePage> {
       
         allCommodities.add(commodityEntry);
       }      setState(() {
-        // Store all commodities for reference
-        commodities = allCommodities.where((commodity) {
-          final itemId = commodity['id'].toString();
-          return displayedCommoditiesIds.contains(itemId);
-        }).toList();
+        // Store all commodities for reference, but only filter if we have selections
+        if (displayedCommoditiesIds.isNotEmpty) {
+          commodities = allCommodities.where((commodity) {
+            final itemId = commodity['id'].toString();
+            return displayedCommoditiesIds.contains(itemId);
+          }).toList();
+        } else {
+          // If no selections yet (first run), use all commodities
+          commodities = allCommodities;
+          // And initialize displayedCommoditiesIds with all commodity IDs
+          displayedCommoditiesIds = allCommodities.map((c) => c['id'].toString()).toList();
+          // Save this initial selection
+          saveDisplayedCommodities();
+          print("✅ First run: Initialized displayedCommoditiesIds with all ${displayedCommoditiesIds.length} commodities");
+        }
 
         for (String favorite in favoriteCommodities) {
           if (!displayedCommoditiesIds.contains(favorite)) {
@@ -569,19 +579,58 @@ class _HomePageState extends State<HomePage> {
       print("❌ Error fetching commodities: $e");
     }
   }
-
   // Load displayed commodities from SharedPreferences
   Future<void> loadDisplayedCommodities() async {
     final prefs = await SharedPreferences.getInstance();
     final storedCommodities = prefs.getStringList('displayedCommodities');
-    setState(() {
-      if (storedCommodities != null) {
+    
+    if (storedCommodities == null || storedCommodities.isEmpty) {
+      // First run - No commodities stored yet
+      // Set all commodities to be visible by default
+      print("🔄 First run detected. Initializing with all commodities visible.");
+      await initializeAllCommodities();
+    } else {
+      // Normal run - Use stored commodities
+      setState(() {
         displayedCommoditiesIds = storedCommodities;
         filteredCommodities = commodities
             .where((commodity) => displayedCommoditiesIds.contains(commodity['id'].toString()))
             .toList();
+      });
+    }
+  }
+  
+  // Initialize with all commodities for first run
+  Future<void> initializeAllCommodities() async {
+    try {
+      // Fetch all commodity IDs from FirestoreService
+      List<String> allCommodityIds = await firestoreService.fetchAllCommodityIds();
+      
+      if (allCommodityIds.isEmpty) {
+        print("⚠️ Warning: No commodity IDs returned from Firestore for first-run initialization");
+        // Try to use the constants as a fallback
+        COMMODITY_ID_TO_DISPLAY.forEach((id, _) {
+          allCommodityIds.add(id);
+        });
       }
-    });
+      
+      setState(() {
+        displayedCommoditiesIds = allCommodityIds;
+      });
+      
+      // Save this list to preferences
+      await saveDisplayedCommodities();
+      
+      print("✅ Successfully initialized app with ${displayedCommoditiesIds.length} commodities");
+    } catch (e) {
+      print("❌ Error initializing commodities: $e");
+      // If all else fails, use constant IDs as fallback
+      final fallbackIds = COMMODITY_ID_TO_DISPLAY.keys.toList();
+      setState(() {
+        displayedCommoditiesIds = fallbackIds;
+      });
+      await saveDisplayedCommodities();
+    }
   }
 
   // Save displayed commodities to SharedPreferences
@@ -595,7 +644,6 @@ class _HomePageState extends State<HomePage> {
     await prefs.setStringList('favoriteCommodities', favoriteCommodities);
     print("Favorites saved: $favoriteCommodities");
   }
-
   Future<void> loadFavorites() async {
     final prefs = await SharedPreferences.getInstance();
     final storedFavorites = prefs.getStringList('favoriteCommodities');
@@ -607,10 +655,13 @@ class _HomePageState extends State<HomePage> {
             displayedCommoditiesIds.add(favorite);
           }
         }
+      } else {
+        // Initialize with empty list to avoid null issues
+        favoriteCommodities = [];
       }
     });
     print("Favorites loaded: $favoriteCommodities");
-  }  Future<void> saveState() async {
+  }Future<void> saveState() async {
     // Save filter and sort globally (not forecast-specific)
     // Always save actual values including "None" for both filter and sort
     final filterToSave = selectedFilter ?? "None";
@@ -2234,11 +2285,29 @@ class _HomePageState extends State<HomePage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [              TextButton(
-                onPressed: () {
-                  // Use cached commodities instead of fetching from Firestore
-                  final allCommodities = commodities.map((c) => c['id'].toString()).toList();
-                    
-                  for (String commodityId in allCommodities) {
+                onPressed: () async {
+                  // Get ALL commodity IDs from constant map instead of filtered commodities
+                  final allCommodityIds = COMMODITY_ID_TO_DISPLAY.keys.toList();
+                  
+                  // If we have few IDs, try fetching from Firestore to be sure
+                  if (allCommodityIds.length < 10) {
+                    try {
+                      final firestoreIds = await firestoreService.fetchAllCommodityIds();
+                      if (firestoreIds.isNotEmpty) {
+                        for (String commodityId in firestoreIds) {
+                          if (!selectedItems.contains(commodityId)) {
+                            onItemChanged(commodityId, true);
+                          }
+                        }
+                        return; // Exit if we successfully used Firestore IDs
+                      }
+                    } catch (e) {
+                      print("❌ Error fetching all commodity IDs: $e");
+                    }
+                  }
+                  
+                  // Fallback to using the constant IDs
+                  for (String commodityId in allCommodityIds) {
                     if (!selectedItems.contains(commodityId)) {
                       onItemChanged(commodityId, true);
                     }
@@ -2258,9 +2327,13 @@ class _HomePageState extends State<HomePage> {
             ],
           ),          Expanded(
             child: Builder(
-              builder: (context) {
-                // Use cached commodities instead of fetching from Firestore
-                final cachedCommodityIds = commodities.map((c) => c['id'].toString()).toList();
+              builder: (context) {                // Get commodity IDs from both commodities list and the COMMODITY_ID_TO_DISPLAY constant
+                List<String> cachedCommodityIds = commodities.map((c) => c['id'].toString()).toList();
+                
+                // If we have few or no commodities in the list, use the constant map as a fallback
+                if (cachedCommodityIds.isEmpty || cachedCommodityIds.length < 10) {
+                  cachedCommodityIds = COMMODITY_ID_TO_DISPLAY.keys.toList();
+                }
                 
                 // Group commodities by category
                 Map<String, List<String>> groupedCommodities = {};
