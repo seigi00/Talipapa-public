@@ -989,7 +989,7 @@ class _HomePageState extends State<HomePage> {
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,                    children: [                      Container(
-                        height: 230, // Return to more rectangular dimensions
+                        height: 200, // Return to more rectangular dimensions
                         width: MediaQuery.of(context).size.width * 0.9, // Use almost the full width
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
@@ -1327,7 +1327,7 @@ class _HomePageState extends State<HomePage> {
                                                         dateText = "Last";
                                                       } else if (forecastPeriod == "Next Week") {
                                                         // Use Week 1 for the Two Weeks view to prevent overflow
-                                                        dateText = selectedForecast == "Two Weeks" ? "Current" : "Next\nWeek";
+                                                        dateText = selectedForecast == "Two Weeks" ? "Current" : "Current";
                                                       } else if (forecastPeriod == "Two Weeks") {
                                                         dateText = "Next Week";
                                                       }
@@ -1440,7 +1440,7 @@ class _HomePageState extends State<HomePage> {
                                         ),
                                       ),
                                       Container(
-                                        padding: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                        padding: EdgeInsets.symmetric(vertical: 4, horizontal: 7), // Reduced padding from 8,12
                                         decoration: BoxDecoration(
                                           color: Colors.white,
                                           borderRadius: BorderRadius.circular(5),
@@ -1451,12 +1451,14 @@ class _HomePageState extends State<HomePage> {
                                               offset: Offset(0, 1),
                                             ),
                                           ],
-                                        ),                                        margin: const EdgeInsets.only(top: 8.0),
+                                        ),
+                                        margin: const EdgeInsets.only(top: 4.0), // Reduced margin from 8
                                         child: Column(
-                                          children: [                                            Text(
+                                          children: [
+                                            Text(
                                               "Price Trend",
                                               style: TextStyle(
-                                                fontSize: 13,
+                                                fontSize: 11, // Reduced from 13
                                                 color: kBlue,
                                                 fontWeight: FontWeight.bold,
                                               ),
@@ -1560,7 +1562,7 @@ class _HomePageState extends State<HomePage> {
                                 children: [
                                   _forecastButton("Now", displayText: "Last Week"),
                                   SizedBox(width: 8), // Reduced spacing between buttons
-                                  _forecastButton("Next Week", displayText: "Current"),
+                                  _forecastButton("Next Week", displayText: "Now"),
                                   SizedBox(width: 8), // Reduced spacing between buttons
                                   _forecastButton("Two Weeks", displayText: "Next Week"),
                                 ],
