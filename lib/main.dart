@@ -76,8 +76,7 @@ class _HomePageState extends State<HomePage> {
   List<Map<String, dynamic>> filteredCommodities = [];
   List<String> favoriteCommodities = [];
   List<String> displayedCommoditiesIds = []; // <-- Use IDs
-  bool isHoldMode = false;
-  Set<String> heldCommodities = {};  String? deviceUUID;
+  String? deviceUUID;
   String globalPriceDate = ""; // Store the latest global price date
   String forecastStartDate = ""; // Store the forecast start date
   bool _dataInitialized = false; // Track if data has been initialized@override
@@ -1774,51 +1773,15 @@ class _HomePageState extends State<HomePage> {
                             final commodityId = commodity['id'].toString();
 
                             return GestureDetector(
-                              onLongPress: () {
-                                setState(() {
-                                  isHoldMode = true;
-                                  heldCommodities.add(commodityId); // Use ID
-                                  selectedCommodityId = null;
-                                });
-                              },
                               onTap: () {
-                                if (isHoldMode) {
-                                  setState(() {
-                                    if (heldCommodities.contains(commodityId)) {
-                                      heldCommodities.remove(commodityId);
-                                      if (heldCommodities.isEmpty) {
-                                        isHoldMode = false;
-                                      }
-                                    } else {
-                                      heldCommodities.add(commodityId);
-                                    }
-                                  });
-                                } else {                                  setState(() {
-                                    if (selectedCommodityId == commodityId) {
-                                      selectedCommodityId = null;
-                                    } else {
-                                      selectedCommodityId = commodityId;
-                                      
-                                      // Cache the selected commodity details to prevent price reset
-                                      final selectedCommodity = filteredCommodities.firstWhere(
-                                        (c) => c['id'].toString() == commodityId,
-                                        orElse: () => commodities.firstWhere(
-                                          (c) => c['id'].toString() == commodityId,
-                                          orElse: () => {},
-                                        ),
-                                      );
-                                      
-                                      if (selectedCommodity.isNotEmpty) {
-                                        DataCache.saveSelectedCommodityDetails(selectedCommodity);
-                                      }
-                                    }
-                                  });
-                                }
+                                setState(() {
+                                  selectedCommodityId = commodityId;
+                                });
                               },
                               child: _buildCommodityItem(
                                 commodity,
                                 isSelected: selectedCommodityId == commodityId,
-                                isHeld: heldCommodities.contains(commodityId),
+                                isHeld: false, // Removed held state
                                 index: index,
                               ),
                             );
@@ -1827,36 +1790,6 @@ class _HomePageState extends State<HomePage> {
                 ),
               ],
             ),
-            if (isHoldMode)
-              Positioned(
-                top: 7, // Adjusted position to move closer to the bottom of the header
-                right: 7, // Align to the right
-                child: Material(
-                  elevation: 4,
-                  borderRadius: BorderRadius.circular(12),
-                  color: Colors.white,
-                  child: InkWell(
-                    onTap: () {
-                      setState(() {
-                        heldCommodities.clear(); // Clear all selected commodities
-                        isHoldMode = false; // Exit "hold mode"
-                      });
-                    },
-                    borderRadius: BorderRadius.circular(12),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      child: Text(
-                        "Deselect All",
-                        style: TextStyle(
-                          color: kPink,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
             if (showTutorial)
               TutorialOverlay(
                 onClose: _closeTutorial, // Ensure the close method is used
@@ -1989,7 +1922,6 @@ class _HomePageState extends State<HomePage> {
   }
   Widget _buildCommodityItem(Map<String, dynamic> commodity, {required bool isSelected, required bool isHeld, required int index}) {
     final String commodityId = commodity['id'].toString();
-    final String commoditySource = commodity['source'].toString();
     
     // Use your mapping for display name and other details
     final display = COMMODITY_ID_TO_DISPLAY[commodityId] ?? {};
@@ -2001,7 +1933,7 @@ class _HomePageState extends State<HomePage> {
     // Get the price and date
     final price = commodity['weekly_average_price'];
     final priceDate = commodity['price_date'] ?? '';
-    final isForecast = commodity['is_forecast'] ?? false;                // Handle empty price display
+    final isForecast = commodity['is_forecast'] ?? false;                // // Handle empty price display
     final bool hasPriceData = price != null && price.toString().isNotEmpty && price != 0.0;
     final String formattedPrice = !hasPriceData 
         ? "-" 

@@ -92,13 +92,6 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
                       subtitle: Text("Tap to select for price prediction",
                         style: TextStyle(color: kBlue)),
                     ),
-                    ListTile(
-                      leading: Icon(Icons.pan_tool, color: kBlue),
-                      title: Text("Multiple Selection",
-                        style: TextStyle(color: kBlue)),
-                      subtitle: Text("Long press to select multiple items",
-                        style: TextStyle(color: kBlue)),
-                    ),
                     SizedBox(height: 24),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
