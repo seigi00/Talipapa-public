@@ -342,17 +342,26 @@ class _HomePageState extends State<HomePage> {
   void _applyFiltersOnly() {
     print("🔍 Applying filters to existing data without Firestore fetch");
     setState(() {
+      // Step 1: First filter based on displayedCommoditiesIds
+      List<Map<String, dynamic>> visibleCommodities = commodities.where((commodity) {
+        final commodityId = commodity['id'].toString();
+        return displayedCommoditiesIds.contains(commodityId);
+      }).toList();
+      
+      print("👁️ Filtering from ${commodities.length} commodities to ${visibleCommodities.length} visible commodities");
+      
+      // Step 2: Then apply category/favorites filter to the visible commodities
       if (selectedFilter == "None" || selectedFilter == null) {
-        filteredCommodities = List.from(commodities);
+        filteredCommodities = visibleCommodities; // Use the already filtered visible commodities
       } else if (selectedFilter == "Favorites") {
         // Update the filter logic for "Favorites"
-        filteredCommodities = commodities.where((commodity) {
+        filteredCommodities = visibleCommodities.where((commodity) {
           final commodityId = commodity['id'].toString();
           return favoriteCommodities.contains(commodityId);
         }).toList();
       } else {
         // Update filter logic for commodity types - now using category
-        filteredCommodities = commodities.where((commodity) {
+        filteredCommodities = visibleCommodities.where((commodity) {
           final commodityId = commodity['id'].toString();
           final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
           if (typeInfo == null) return false;
@@ -588,18 +597,22 @@ class _HomePageState extends State<HomePage> {
       // Set all commodities to be visible by default
       print("🔄 First run detected. Initializing with all commodities visible.");
       await initializeAllCommodities();
-    } else {
-      // Normal run - Use stored commodities
+    } else {      // Normal run - Use stored commodities
       setState(() {
         displayedCommoditiesIds = storedCommodities;
-        filteredCommodities = commodities
+        // Filter commodities based on displayedCommoditiesIds
+        commodities = commodities
             .where((commodity) => displayedCommoditiesIds.contains(commodity['id'].toString()))
             .toList();
+        
+        // Update filtered commodities too
+        filteredCommodities = commodities;
+        
+        print("✅ Loaded ${displayedCommoditiesIds.length} displayed commodity IDs");
       });
     }
   }
-  
-  // Initialize with all commodities for first run
+    // Initialize with all commodities for first run
   Future<void> initializeAllCommodities() async {
     try {
       // Fetch all commodity IDs from FirestoreService
@@ -798,15 +811,18 @@ class _HomePageState extends State<HomePage> {
                   });
                 },
               ),
-              actions: [                TextButton(
-                  onPressed: () async {
+              actions: [                TextButton(                  onPressed: () async {
                     setState(() {
                       displayedCommoditiesIds = List.from(tempSelectedItems); // Save changes to the main list
                     });
                     await saveDisplayedCommodities(); // Persist changes
                     
-                    // Apply filters to reflect changes without fetching from Firestore
+                    // Apply filters with updated displayedCommoditiesIds to reflect changes
                     _applyFiltersOnly();
+                    
+                    // Print debug info
+                    print("📋 Updated displayedCommoditiesIds (${displayedCommoditiesIds.length}): ${displayedCommoditiesIds.take(5).join(', ')}...");
+                    print("📊 Updated filtered commodities count: ${filteredCommodities.length}");
                     
                     Navigator.pop(context); // Close the dialog
                   },
@@ -2148,26 +2164,33 @@ class _HomePageState extends State<HomePage> {
                                commodity['last_historical_price'] == 0.0;
     
     return hasNoPrice && hasNoHistoricalPrice || priceDate == 'Insufficient Data';
-  }// Helper to apply filters
+  }  // Helper to apply filters
   List<Map<String, dynamic>> _applyFilter(
       List<Map<String, dynamic>> displayedCommodities,
       List<Map<String, dynamic>> allCommodities) {
     List<Map<String, dynamic>> result;
     
+    // First filter by displayedCommoditiesIds (visible items)
+    List<Map<String, dynamic>> visibleCommodities = displayedCommodities.where((commodity) {
+      final commodityId = commodity['id'].toString();
+      return displayedCommoditiesIds.contains(commodityId);
+    }).toList();
+    
     if (selectedFilter == null || selectedFilter == "None") {
-      result = List.from(displayedCommodities);
+      result = List.from(visibleCommodities);
       // Ensure "None" is saved properly
       if (selectedFilter == null) {
         DataCache.saveSelectedFilter("None", "global");
         selectedFilter = "None";
       }
     } else if (selectedFilter == "Favorites") {
+      // For favorites, start with all commodities but still filter by displayedCommoditiesIds
       result = allCommodities.where((commodity) {
         final commodityId = commodity['id'].toString();
-        return favoriteCommodities.contains(commodityId);
+        return favoriteCommodities.contains(commodityId) && displayedCommoditiesIds.contains(commodityId);
       }).toList();
     } else {
-      result = displayedCommodities.where((commodity) {
+      result = visibleCommodities.where((commodity) {
         final commodityId = commodity['id'].toString();
         final typeInfo = COMMODITY_ID_TO_DISPLAY[commodityId];
         if (typeInfo == null) return false;
