@@ -743,9 +743,13 @@ class _HomePageState extends State<HomePage> {
       context: context,
       builder: (context) {
         return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: Text("Select Favorites"),
+          builder: (context, setState) {            return AlertDialog(
+              title: Text("Select Favorites", style: TextStyle(color: kBlue, fontWeight: FontWeight.bold)),
+              backgroundColor: kLightGray,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: kPink.withOpacity(0.3), width: 1),
+              ),
               content: _buildDialogContent(
                 favoritesSearchText,
                 favoriteCommodities,
@@ -765,14 +769,18 @@ class _HomePageState extends State<HomePage> {
                   });
                 },
               ),
-              actions: [                TextButton(
-                  onPressed: () {
+              actions: [                TextButton(                  onPressed: () {
                     Navigator.pop(context);
                     // Apply filters to update the UI with new favorites
                     _applyFiltersOnly();
                     setState(() {}); // Force UI update
                   },
-                  child: Text("Done"),
+                  style: TextButton.styleFrom(
+                    foregroundColor: kBlue,
+                    backgroundColor: kGreen.withOpacity(0.2),
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  ),
+                  child: Text("Done", style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ],
             );
@@ -790,9 +798,13 @@ class _HomePageState extends State<HomePage> {
       context: context,
       builder: (context) {
         return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: Text("Manage Commodities"),
+          builder: (context, setState) {            return AlertDialog(
+              title: Text("Manage Commodities", style: TextStyle(color: kBlue, fontWeight: FontWeight.bold)),
+              backgroundColor: kLightGray,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: kPink.withOpacity(0.3), width: 1),
+              ),
               content: _buildDialogContent(
                 addCommoditiesSearchText,
                 tempSelectedItems,
@@ -826,7 +838,12 @@ class _HomePageState extends State<HomePage> {
                     
                     Navigator.pop(context); // Close the dialog
                   },
-                  child: Text("Done"),
+                  style: TextButton.styleFrom(
+                    foregroundColor: kBlue,
+                    backgroundColor: kGreen.withOpacity(0.2),
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  ),
+                  child: Text("Done", style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ],
             );
@@ -2246,9 +2263,8 @@ class _HomePageState extends State<HomePage> {
       String searchText,
       List<String> selectedItems,
       Function(String, bool) onItemChanged,
-      Function(String) onSearchChanged) {
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.6,
+      Function(String) onSearchChanged) {    return Container(
+      height: MediaQuery.of(context).size.height * 0.5, // Reduced height from 0.6 to 0.5
       width: MediaQuery.of(context).size.width * 0.8,
       child: Column(
         children: [
@@ -2261,7 +2277,11 @@ class _HomePageState extends State<HomePage> {
                 prefixIcon: Icon(Icons.search, color: kBlue),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(color: kBlue),
+                  borderSide: BorderSide(color: kPink),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: kPink, width: 2),
                 ),
                 contentPadding: EdgeInsets.symmetric(vertical: 8),
               ),
@@ -2270,11 +2290,19 @@ class _HomePageState extends State<HomePage> {
               },
             ),
           ),
-          SizedBox(height: 8),
-          // Check/Uncheck All buttons
+          SizedBox(height: 8),          // Check/Uncheck All buttons
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [              TextButton(
+                style: TextButton.styleFrom(
+                  foregroundColor: kBlue,
+                  backgroundColor: kGreen.withOpacity(0.1),
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  minimumSize: Size(0, 30),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                ),
                 onPressed: () async {
                   // Get ALL commodity IDs from constant map instead of filtered commodities
                   final allCommodityIds = COMMODITY_ID_TO_DISPLAY.keys.toList();
@@ -2304,8 +2332,16 @@ class _HomePageState extends State<HomePage> {
                   }
                 },
                 child: Text("Check All"),
-              ),
-              TextButton(
+              ),              TextButton(
+                style: TextButton.styleFrom(
+                  foregroundColor: kBlue,
+                  backgroundColor: kPink.withOpacity(0.1),
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  minimumSize: Size(0, 30),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                ),
                 onPressed: () {
                   List<String> itemsToRemove = List.from(selectedItems);
                   for (String item in itemsToRemove) {
@@ -2364,15 +2400,13 @@ class _HomePageState extends State<HomePage> {
                       groupedCommodities[category]!.isNotEmpty).map((category) {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: Text(
-                              category, // Category name
+                        children: [                          Padding(
+                            padding: const EdgeInsets.only(left: 8.0, top: 8.0, bottom: 4.0), // Reduced padding
+                            child: Text(category, // Category name
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: kBlue,
-                                fontSize: 16,
+                                fontSize: 15, // Slightly smaller for more compact look
                               ),
                             ),
                           ),
@@ -2382,17 +2416,27 @@ class _HomePageState extends State<HomePage> {
                             final specification = displayData['specification'] != "-" 
                                 ? " (${displayData['specification']})" 
                                 : "";
-                            
-                            return CheckboxListTile(
-                              title: Text(displayName + specification),
+                              return CheckboxListTile(
+                              title: Text(
+                                displayName + specification,
+                                style: TextStyle(fontSize: 14),
+                              ),
                               dense: true,
+                              contentPadding: EdgeInsets.symmetric(horizontal: 4),
                               value: selectedItems.contains(commodityId),
+                              activeColor: kPink,
+                              checkColor: Colors.white,
+                              controlAffinity: ListTileControlAffinity.leading,
                               onChanged: (bool? value) {
                                 onItemChanged(commodityId, value ?? false);
                               },
                             );
                           }).toList(),
-                          Divider(),
+                          Divider(
+                            color: kDivider,
+                            thickness: 1,
+                            height: 10,
+                          ),
                         ],
                       );
                     }).toList(),
