@@ -31,12 +31,61 @@ class _ChatbotPageState extends State<ChatbotPage> {
   static const String _forecastedPricesKey = 'chatbot_cached_forecasted_prices';
   static const String _contextDataKey = 'chatbot_cached_context_data';
   static const String _lastFetchTimeKey = 'chatbot_last_fetch_time';
+  static const String _messagesHistoryKey = 'chatbot_messages_history';
   static const int _cacheDuration = 15; // 30 minutes by default
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    _loadMessageHistory();
+  }
+
+  // Load message history from SharedPreferences
+  Future<void> _loadMessageHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final messagesJson = prefs.getString(_messagesHistoryKey);
+      
+      if (messagesJson != null && messagesJson.isNotEmpty) {
+        final List<dynamic> messagesList = jsonDecode(messagesJson);
+        setState(() {
+          _messages.clear();
+          _messages.addAll(
+            messagesList.map((message) => Map<String, String>.from(message)).toList()
+          );
+        });
+        print('✅ Loaded ${_messages.length} messages from history');
+      }
+    } catch (e) {
+      print('❌ Error loading message history: $e');
+    }
+  }
+
+  // Save message history to SharedPreferences
+  Future<void> _saveMessageHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final messagesJson = jsonEncode(_messages);
+      await prefs.setString(_messagesHistoryKey, messagesJson);
+      print('✅ Saved ${_messages.length} messages to history');
+    } catch (e) {
+      print('❌ Error saving message history: $e');
+    }
+  }
+
+  // Clear message history (optional method for future use)
+  Future<void> _clearMessageHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_messagesHistoryKey);
+      setState(() {
+        _messages.clear();
+      });
+      print('✅ Cleared message history');
+    } catch (e) {
+      print('❌ Error clearing message history: $e');
+    }
   }
 
   // Load all data needed for the chatbot
@@ -346,6 +395,9 @@ class _ChatbotPageState extends State<ChatbotPage> {
       _isLoading = true;
     });
 
+    // Save message history after adding user message
+    await _saveMessageHistory();
+
     _messageController.clear();
 
     try {
@@ -355,10 +407,13 @@ class _ChatbotPageState extends State<ChatbotPage> {
       final url = Uri.parse('https://llm.talipapa.shop/completions');
       final body = jsonEncode({
         "prompt": prompt,
-        "cache_prompt": false,
+        "cache_prompt": true,
         "max_tokens": 500,
         "top_p":0.9,
         "temperature": 0.9,
+        // "repeat_penalty": 1.1,
+        // "frequency_penalty": 0.2,
+        // "presence_penalty": 0.3,
         "stop": ["<|user|>", "<|assistant|>"],
         "model": "capybarahermes-2.5-mistral-7b.Q4_K_M.gguf"
       });
@@ -382,6 +437,9 @@ class _ChatbotPageState extends State<ChatbotPage> {
           _messages.add({"bot": botReply});
           _isLoading = false;
         });
+
+        // Save message history after adding bot response
+        await _saveMessageHistory();
       } else {
         setState(() {
           _messages.add({
@@ -389,12 +447,18 @@ class _ChatbotPageState extends State<ChatbotPage> {
           });
           _isLoading = false;
         });
+
+        // Save message history after adding error message
+        await _saveMessageHistory();
       }
     } catch (e) {
       setState(() {
         _messages.add({"bot": "Error fetching bot response: $e"});
         _isLoading = false;
       });
+
+      // Save message history after adding error message
+      await _saveMessageHistory();
     }
   }
 
@@ -430,12 +494,18 @@ class _ChatbotPageState extends State<ChatbotPage> {
       setState(() {
         _messages.add({"bot": "I've updated with the latest price information!"});
       });
+
+      // Save message history after adding refresh message
+      await _saveMessageHistory();
     } catch (e) {
       print('❌ Error refreshing price data in ChatbotPage: $e');
       setState(() {
         _isLoadingPrices = false;
         _messages.add({"bot": "Failed to update prices. Please try again later."});
       });
+
+      // Save message history after adding error message
+      await _saveMessageHistory();
     }
   }
   
