@@ -569,7 +569,7 @@ const Map<String, Map<String, String>> COMMODITY_ID_TO_DISPLAY = {
     "display_name": "Cooking Oil (Palm)",
     "category": "Other Basic Commodities",
     "specification": "350 ml/bottle",
-    "unit": "350 ml"
+    "unit": "ml"
   },
   "48fab619-de31-4645-b0d9-c1608865b628": {
     "display_name": "Cooking Oil (Palm)",
@@ -581,7 +581,7 @@ const Map<String, Map<String, String>> COMMODITY_ID_TO_DISPLAY = {
     "display_name": "Cooking Oil (Coconut)",
     "category": "Other Basic Commodities",
     "specification": "350 ml/bottle",
-    "unit": "350 ml"
+    "unit": "ml"
   },
   "be1b16b3-fbb1-402f-97e4-2cb82f3c32a5": {
     "display_name": "Cooking Oil (Coconut)",

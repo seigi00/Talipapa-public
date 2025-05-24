@@ -1,5 +1,3 @@
-// chatbot header too big. try center setting options, change font of settings text
-
 import 'package:Talipapa/tutorial_overlay.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -1987,13 +1985,11 @@ class _HomePageState extends State<HomePage> {
       
     // Get historical date if available
     final String historicalDate = hasHistoricalPrice && commodity['last_historical_date'] != null ? 
-      commodity['last_historical_date'].toString() : "";
-
-    // Alternate background color based on index
+      commodity['last_historical_date'].toString() : "";    // Alternate background color based on index
     final backgroundColor = index % 2 == 0 ? Colors.white : kAltGray;
     
-    // Hide category when user filtered by a specific category (not "None" or "Favorites")
-    final bool showCategory = selectedFilter == null || selectedFilter == "Favorites";
+    // Get unit from display data
+    final String unit = display["unit"] ?? "kg";
 
     return AnimatedContainer(
       duration: Duration(milliseconds: 200),
@@ -2044,45 +2040,61 @@ class _HomePageState extends State<HomePage> {
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                  ),
-                  SizedBox(height: 4),
+                  ),                  SizedBox(height: 4),                  if (selectedFilter == "None" || selectedFilter == null || selectedFilter == "Favorites")
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          specification,
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        SizedBox(height: 4),
+                      ],
+                    ),
                   Text(
-                    specification,
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                    category,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
-                  if (showCategory) ...[
-                    SizedBox(height: 4),
-                    Text(
-                      category,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.grey,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
                 ],
               ),
             ),
-            SizedBox(width: 5),
-            // Price and date (right side)
+            SizedBox(width: 5),            // Price and date (right side)
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  hasPriceData 
-                    ? "₱$formattedPrice" 
-                    : (hasHistoricalPrice && selectedForecast == "Now") 
-                      ? "₱$historicalPrice" 
-                      : "₱-",
-                  style: TextStyle(
-                    fontWeight: (hasPriceData || (hasHistoricalPrice && selectedForecast == "Now")) ? FontWeight.w500 : FontWeight.normal, 
-                    fontSize: 20,
-                    color: (hasPriceData || (hasHistoricalPrice && selectedForecast == "Now")) ? null : Colors.grey
-                  ),
-                ),                // Show data status
+              children: [                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text(
+                      "($unit)",
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: const Color.fromARGB(255, 206, 206, 206),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    SizedBox(width: 4),
+                    Text(
+                      hasPriceData 
+                        ? "₱$formattedPrice" 
+                        : (hasHistoricalPrice && selectedForecast == "Now") 
+                          ? "₱$historicalPrice" 
+                          : "₱-",
+                      style: TextStyle(
+                        fontWeight: (hasPriceData || (hasHistoricalPrice && selectedForecast == "Now")) ? FontWeight.w500 : FontWeight.normal, 
+                        fontSize: 20,
+                        color: (hasPriceData || (hasHistoricalPrice && selectedForecast == "Now")) ? null : Colors.grey
+                      ),
+                    ),
+                  ],
+                ),// Show data status
                 if (!hasPriceData && !hasHistoricalPrice)
                   Container(
                     margin: EdgeInsets.only(top: 4),
