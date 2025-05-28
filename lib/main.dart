@@ -1772,18 +1772,6 @@ class _HomePageState extends State<HomePage> {
                             icon: Icon(Icons.star, color: kPink),
                             onPressed: showFavoritesDialog,
                           ),
-                          // Temporary cache clear button
-                          IconButton(
-                            icon: Icon(Icons.cleaning_services, color: Colors.red),
-                            onPressed: () async {
-                              final prefs = await SharedPreferences.getInstance();
-                              await prefs.clear();
-                              print("🧹 Cleared all cache!");
-                              // Reload the app state
-                              await loadState();
-                              setState(() {});
-                            },
-                          ),
                         ],
                       ),                      // Total items count (minimal display)
                       Container(

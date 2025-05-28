@@ -129,6 +129,34 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             // Removed the Notifications Toggle
             
+            // Clear Cache Button
+            ListTile(              title: Row(
+                children: [
+                  Text(
+                    "Clear Cache",
+                    style: TextStyle(fontSize: 18, color: kBlue),
+                  ),
+                  SizedBox(width: 8),
+                  Icon(Icons.cleaning_services, color: kBlue, size: 20),
+                ],
+              ),
+              subtitle: Text(
+                "Warning: after clearing cache you still have to Manually Fetch Data to repopulate the list.",
+                style: TextStyle(fontSize: 12, color: kBlue.withOpacity(0.7)),
+              ),
+              onTap: () async {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.clear();
+                print("🧹 Cleared all cache!");
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text("Cache cleared successfully"),
+                    backgroundColor: Colors.red[700],
+                  ),
+                );
+              },
+            ),
+
             // Manually Fetch Data
             ListTile(
               title: Text(
