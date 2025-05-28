@@ -330,16 +330,18 @@ class _ChatbotPageState extends State<ChatbotPage> with WidgetsBindingObserver {
 
     buffer.writeln(
       '<|system|>\n'
-      'You are Talipapa Chatbot, a helpful assistant in a mobile app that provides average market prices and forecasted prices of goods in the Philippines.\n\n'
+      'You are Talipapa Chatbot, a helpful and smart assistant in a mobile app that provides average market prices and forecasted prices of goods in the Philippines.\n\n'
       'Rules:\n'
-      '- Always refer to yourself as "Talipapa Chatbot".\n'
+      '- If asked, refer to yourself as "Talipapa Chatbot".\n'
+      '- You must prioritize using the provided data below. Only use general knowledge if the data does NOT contain any relevant information.\n'
       '- Only answer questions if you can find relevant **official** or **forecasted** price data within date range in the context below.\n'
-      '- Do not guess or make up answers. Only use the data provided.\n'
+      '- If relevant data is available, DO NOT generalize or speculate beyond what the data shows.\n'
       '- If you are asked for forecasted prices without a specific commodity. You must not answer.\n'
+      '- Be careful to distinguish between whole chicken (Fully Dressed) and chicken eggs.\n'
       '- If there is no relevant data for a commodity, reply exactly with:\n'
       '  "Sorry, I don\'t have data about that item at the moment."\n'
       '- You may provide related insights such as recipes or suggestions *only if clearly related to the provided data*.\n\n'
-      'Here is the data:\n'
+      'Here is the data provided by the system:\n'
       '$_cachedContextData\n'
     );
 
@@ -349,7 +351,9 @@ class _ChatbotPageState extends State<ChatbotPage> with WidgetsBindingObserver {
       if (message.containsKey('user')) {
         buffer.writeln('<|user|> ${message['user']}');
       } else if (message.containsKey('bot')) {
-        buffer.writeln('<|assistant|> ${message['bot']}');
+        // Strip trailing timestamps like " | 2023-05-03 07:50:50"
+        final cleanBotMsg = message['bot']?.replaceAll(RegExp(r'\s*\|\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'), '');
+        buffer.writeln('<|assistant|> $cleanBotMsg');
       }
     }
 
@@ -366,71 +370,86 @@ class _ChatbotPageState extends State<ChatbotPage> with WidgetsBindingObserver {
 
   // Get context data for the chatbot, including latest prices
   String _getContextData() {
-    // Format the latest prices data for the chatbot
-    final buffer = StringBuffer();
-    buffer.writeln("LAST WEEK OFFICIAL PRICES:");
-    
-    if (_latestPrices.isEmpty) {
-      buffer.writeln("No price data is currently available.");
-    } else {
-      _latestPrices.forEach((commodityId, priceData) {
-        
-        // Get the commodity ID from the original data
-        final id = priceData['original_data']['commodity_id'] ?? '';
-        
-        // Look up the display name from the constants
-        String displayName = 'Unknown';
-        String unit = 'kg'; // Default unit
-        
-        if (COMMODITY_ID_TO_DISPLAY.containsKey(id)) {
-          // Get the display name from the mapping
-          displayName = COMMODITY_ID_TO_DISPLAY[id]?['display_name'] ?? 'Unknown';
-          
-          // Get the unit if available
-          unit = COMMODITY_ID_TO_DISPLAY[id]?['unit'] ?? 'kg';
-        }
-        
-        final price = priceData['price'] ?? 0.0;
-        final date = priceData['formatted_end_date'] ?? '';
-        // Use the display name instead of the ID
-        buffer.writeln("$displayName: ₱$price per $unit as of $date");
-      });
-    }
-    
-    //Add Forecasted Prices 
-    buffer.writeln("FORECASTED PRICES:");
-    
-    if (_forecastedPrices.isEmpty) {
-      buffer.writeln("No forecast price data is currently available.");
-    } else {
-      if (_forecastedPrices['success'] == true) {
-        final Map<String, List<dynamic>> forecastedPrices =
-            Map<String, List<dynamic>>.from(_forecastedPrices['forecast_data']);
+  // Format the latest prices data for the chatbot
+  final buffer = StringBuffer();
+  buffer.writeln("OFFICIAL PRICES FROM LAST WEEK:");
 
-        buffer.writeln("✅ Successfully organized forecast data for ${forecastedPrices.length} commodities");
+  if (_latestPrices.isEmpty) {
+    buffer.writeln("No price data is currently available.");
+  } else {
+    _latestPrices.forEach((commodityId, priceData) {
+      // Get the commodity ID from the original data
+      final id = priceData['original_data']['commodity_id'] ?? '';
 
-        forecastedPrices.forEach((commodityId, forecasts) {
-          final name = COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? 'Unknown';
-          final specification = COMMODITY_ID_TO_DISPLAY[commodityId]?['specification'] ?? 'Unknown';
-          final unit = COMMODITY_ID_TO_DISPLAY[commodityId]?['unit'] ?? 'Unknown';
-          buffer.writeln("\nCommodity: $name");
-          buffer.writeln("Specification: $specification");
-          for (int i = 0; i < forecasts.length; i++) {
-            final forecast = forecasts[i];
-            final label = forecast['forecast_period'] ?? '';
-            final date = forecast['formatted_end_date'] ?? '';
-            final price = forecast['price'] ?? 0.0;
+      // Look up the display name from the constants
+      String displayName = 'Unknown';
+      String unit = 'kg'; // Default unit
 
-            buffer.writeln("🔸 $label: $date - ₱$price per $unit");
-          }
-        });
-      } else {
-        buffer.writeln("No forecast price data is currently available.");
+      if (COMMODITY_ID_TO_DISPLAY.containsKey(id)) {
+        // Get the display name from the mapping
+        displayName = COMMODITY_ID_TO_DISPLAY[id]?['display_name'] ?? 'Unknown';
+
+        // Get the unit if available
+        unit = COMMODITY_ID_TO_DISPLAY[id]?['unit'] ?? 'kg';
       }
-    }
 
-    return buffer.toString();
+      final price = priceData['price'] ?? 0.0;
+      final rawDate = priceData['formatted_end_date'] ?? '';
+      final date = rawDate.split(' ').first; // remove timestamp if present
+
+      buffer.writeln("{");
+      buffer.writeln('  "Commodity": "$displayName",');
+      buffer.writeln('  "Date": "$date",');
+      buffer.writeln('  "Price": "₱$price",');
+      buffer.writeln('  "Unit": "per $unit"');
+      buffer.writeln("}");
+      buffer.writeln(""); // spacing for clarity
+    });
   }
+
+  // Add Forecasted Prices
+  buffer.writeln("FORECASTED PRICES:");
+
+  if (_forecastedPrices.isEmpty) {
+    buffer.writeln("No forecast price data is currently available.");
+  } else {
+    if (_forecastedPrices['success'] == true) {
+      final Map<String, List<dynamic>> forecastedPrices =
+          Map<String, List<dynamic>>.from(_forecastedPrices['forecast_data']);
+
+      buffer.writeln("✅ Successfully organized forecast data for ${forecastedPrices.length} commodities");
+
+      forecastedPrices.forEach((commodityId, forecasts) {
+        final name = COMMODITY_ID_TO_DISPLAY[commodityId]?['display_name'] ?? 'Unknown';
+        final specification = COMMODITY_ID_TO_DISPLAY[commodityId]?['specification'] ?? 'Unknown';
+        final unit = COMMODITY_ID_TO_DISPLAY[commodityId]?['unit'] ?? 'Unknown';
+
+        buffer.writeln("\nCommodity: $name");
+        buffer.writeln("Specification: $specification");
+
+        for (int i = 0; i < forecasts.length; i++) {
+          final forecast = forecasts[i];
+          final label = forecast['forecast_period'] ?? '';
+          final rawDate = forecast['formatted_end_date'] ?? '';
+          final date = rawDate.split(' ').first; // remove timestamp if present
+          final price = forecast['price'] ?? 0.0;
+
+          buffer.writeln("{");
+          buffer.writeln('  "Commodity": "$name",');
+          buffer.writeln('  "Date": "$date",');
+          buffer.writeln('  "Price": "₱$price",');
+          buffer.writeln('  "Unit": "per $unit"');
+          buffer.writeln("}");
+          buffer.writeln(""); // spacing for clarity
+        }
+      });
+    } else {
+      buffer.writeln("No forecast price data is currently available.");
+    }
+  }
+
+  return buffer.toString();
+}
 
   Future<void> _sendMessage() async {
     final message = _messageController.text.trim();
