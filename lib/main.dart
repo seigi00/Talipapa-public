@@ -1638,9 +1638,8 @@ class _HomePageState extends State<HomePage> {
                         children: [
                           // Sort by Dropdown
                           Flexible(
-                            flex: 1,
-                            child: DropdownButton<String>(
-                              value: selectedSort,
+                            flex: 1,                            child: DropdownButton<String>(
+                              value: selectedSort == "None" ? null : selectedSort,
                               hint: Text(
                                 "Sort by",
                                 style: TextStyle(
@@ -1693,9 +1692,8 @@ class _HomePageState extends State<HomePage> {
                           SizedBox(width: 8),
                           // Filter by Dropdown
                           Flexible(
-                            flex: 1,
-                            child: DropdownButton<String>(
-                              value: selectedFilter,
+                            flex: 1,                            child: DropdownButton<String>(
+                              value: selectedFilter == "None" ? null : selectedFilter,
                               hint: Text(
                                 "Filter by",
                                 style: TextStyle(
