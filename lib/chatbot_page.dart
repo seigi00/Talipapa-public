@@ -13,7 +13,7 @@ class ChatbotPage extends StatefulWidget {
   _ChatbotPageState createState() => _ChatbotPageState();
 }
 
-class _ChatbotPageState extends State<ChatbotPage> {
+class _ChatbotPageState extends State<ChatbotPage> with WidgetsBindingObserver {
   final TextEditingController _messageController = TextEditingController();
   final List<Map<String, String>> _messages = [];
   
@@ -34,14 +34,62 @@ class _ChatbotPageState extends State<ChatbotPage> {
   static const String _messagesHistoryKey = 'chatbot_messages_history';
   static const int _cacheDuration = 15; // 30 minutes by default
 
-  @override
+  // Load all data n @override
   void initState() {
     super.initState();
+    // Add lifecycle observer to detect app state changes
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
+    // Load message history to restore chat when reopening the page
     _loadMessageHistory();
   }
 
-  // Load message history from SharedPreferences
+  @override
+  void dispose() {
+    // Remove lifecycle observer
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    
+    switch (state) {
+      case AppLifecycleState.detached:
+        // App is being completely closed/terminated
+        // Clear chat history only when app is detached (fully closed)
+        _clearMessageHistoryOnAppClose();
+        print('✅ App detached - clearing chat history');
+        break;
+      case AppLifecycleState.paused:
+        // App moved to background but not closed - don't clear history
+        print('✅ App paused (moved to background) - keeping chat history');
+        break;
+      case AppLifecycleState.resumed:
+        print('✅ App resumed');
+        break;
+      case AppLifecycleState.inactive:
+        print('✅ App inactive');
+        break;
+      case AppLifecycleState.hidden:
+        print('✅ App hidden');
+        break;
+    }
+  }
+
+  // Clear message history only when app is completely closed
+  Future<void> _clearMessageHistoryOnAppClose() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_messagesHistoryKey);
+      print('✅ Cleared chat history on app close');
+    } catch (e) {
+      print('❌ Error clearing message history on app close: $e');
+    }
+  }
+
+  // Load message history from SharedPreferences (kept for potential future use)
   Future<void> _loadMessageHistory() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -62,7 +110,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
     }
   }
 
-  // Save message history to SharedPreferences
+  // Save message history to SharedPreferences (re-enabled for session persistence)
   Future<void> _saveMessageHistory() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -74,7 +122,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
     }
   }
 
-  // Clear message history (optional method for future use)
+  // Clear message history (updated method for manual clearing)
   Future<void> _clearMessageHistory() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -87,8 +135,6 @@ class _ChatbotPageState extends State<ChatbotPage> {
       print('❌ Error clearing message history: $e');
     }
   }
-
-  // Load all data needed for the chatbot
   Future<void> _loadData() async {
     await _loadLatestPrices();
     _generateAndCacheContextData();
@@ -287,7 +333,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
       'You are Talipapa Chatbot, a helpful assistant in a mobile app that provides average market prices and forecasted prices of goods in the Philippines.\n\n'
       'Rules:\n'
       '- Always refer to yourself as "Talipapa Chatbot".\n'
-      '- Only answer questions if you can find relevant **official** or **forecasted** price data in the context below.\n'
+      '- Only answer questions if you can find relevant **official** or **forecasted** price data within date range in the context below.\n'
       '- Do not guess or make up answers. Only use the data provided.\n'
       '- If you are asked for forecasted prices without a specific commodity. You must not answer.\n'
       '- If there is no relevant data for a commodity, reply exactly with:\n'
@@ -322,7 +368,7 @@ class _ChatbotPageState extends State<ChatbotPage> {
   String _getContextData() {
     // Format the latest prices data for the chatbot
     final buffer = StringBuffer();
-    buffer.writeln("LAST WEEK ACTUAL PRICES:");
+    buffer.writeln("LAST WEEK OFFICIAL PRICES:");
     
     if (_latestPrices.isEmpty) {
       buffer.writeln("No price data is currently available.");
@@ -409,8 +455,8 @@ class _ChatbotPageState extends State<ChatbotPage> {
         "prompt": prompt,
         "cache_prompt": true,
         "max_tokens": 500,
-        "top_p":0.9,
-        "temperature": 0.9,
+        "top_p":0.8,
+        "temperature": 0.8,
         // "repeat_penalty": 1.1,
         // "frequency_penalty": 0.2,
         // "presence_penalty": 0.3,
@@ -508,7 +554,92 @@ class _ChatbotPageState extends State<ChatbotPage> {
       await _saveMessageHistory();
     }
   }
-  
+  // Clear all chat messages with confirmation dialog
+  Future<void> _clearAllMessages() async {
+    // Show confirmation dialog
+    final bool? shouldClear = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(
+            'Clear All Messages',
+            style: TextStyle(
+              fontFamily: 'Raleway',
+              fontWeight: FontWeight.bold,
+              color: kBlue,
+            ),
+          ),
+          content: Text(
+            'Are you sure you want to delete all chat messages? This action cannot be undone.',
+            style: TextStyle(fontFamily: 'Raleway'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: Text(
+                'Cancel',
+                style: TextStyle(color: Colors.grey),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.red,
+              ),
+              child: Text(
+                'Delete',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    // If user confirmed, clear the messages
+    if (shouldClear == true) {
+      setState(() {
+        _isLoading = true;
+      });
+
+      try {
+        // Clear all chat messages from both state and cache
+        await _clearMessageHistory();
+        
+        // Optional: Add a brief delay for better UX
+        await Future.delayed(Duration(milliseconds: 300));
+        
+        setState(() {
+          _isLoading = false;
+        });
+        
+        print('✅ Chat messages cleared successfully');
+        
+        // Optional: Show a brief confirmation snackbar
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('All messages cleared'),
+            duration: Duration(seconds: 2),
+            backgroundColor: kGreen,
+          ),
+        );
+      } catch (e) {
+        print('❌ Error clearing chat messages: $e');
+        setState(() {
+          _isLoading = false;
+        });
+        
+        // Show error snackbar
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to clear messages'),
+            duration: Duration(seconds: 2),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
   // Extract only the data we need from the price objects to avoid Timestamp issues
   Map<String, dynamic> _extractPriceData(Map<String, dynamic> prices) {
     final result = <String, dynamic>{};
@@ -585,6 +716,11 @@ class _ChatbotPageState extends State<ChatbotPage> {
         preferredSize: Size.fromHeight(100), // Keep the existing header height
         child: AppBar(
           backgroundColor: kGreen,
+          leading: IconButton(
+      icon: Icon(Icons.delete_outline, color: kBlue),
+      onPressed: _isLoading ? null : _clearAllMessages,
+      tooltip: 'Clear all messages',
+    ),
           flexibleSpace: SafeArea(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.end, // Align content to bottom
