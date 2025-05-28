@@ -1768,9 +1768,7 @@ class _HomePageState extends State<HomePage> {
                             icon: Icon(Icons.star, color: kPink),
                             onPressed: showFavoritesDialog,
                           ),
-                          IconButton(
-                            icon: Icon(Icons.add, color: kPink),                            onPressed: showAddDialog,
-                          ),
+                    
                         ],
                       ),                      // Total items count (minimal display)
                       Container(
