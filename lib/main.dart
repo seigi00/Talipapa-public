@@ -699,11 +699,18 @@ class _HomePageState extends State<HomePage> {
         final prefs = await SharedPreferences.getInstance();
         final legacyFilter = prefs.getString('selectedFilter');
         finalFilterValue = legacyFilter; // Always use the actual value including "None"
-        
+
         // If we found a legacy filter, migrate it to the new global system
         if (finalFilterValue != null) {
           await DataCache.saveSelectedFilter(finalFilterValue, "global");
           print("✅ Migrated legacy filter setting to global filter system");
+        }
+
+        // Check for old value and correct it
+        if (finalFilterValue == "LOCAL COMMERCE RICE") {
+          finalFilterValue = "LOCAL COMMERCIAL RICE";
+          // Update the stored value
+          await DataCache.saveSelectedFilter(finalFilterValue, "global");
         }
       }
       
@@ -1707,7 +1714,7 @@ class _HomePageState extends State<HomePage> {
                                 "Favorites",
                                 "KADIWA RICE-FOR-ALL",
                                 "IMPORTED COMMERCIAL RICE",
-                                "LOCAL COMMERCE RICE",
+                                "LOCAL COMMERCIAL RICE",
                                 "CORN",
                                 "FISH",
                                 "LIVESTOCK & POULTRY PRODUCTS",
@@ -1760,11 +1767,22 @@ class _HomePageState extends State<HomePage> {
                               isExpanded: true,
                               menuMaxHeight: 200, // Limit the dropdown height to make it scrollable
                             ),
-                          ),
-                          SizedBox(width: 8),
+                          ),                          SizedBox(width: 8),
                           IconButton(
                             icon: Icon(Icons.star, color: kPink),
                             onPressed: showFavoritesDialog,
+                          ),
+                          // Temporary cache clear button
+                          IconButton(
+                            icon: Icon(Icons.cleaning_services, color: Colors.red),
+                            onPressed: () async {
+                              final prefs = await SharedPreferences.getInstance();
+                              await prefs.clear();
+                              print("🧹 Cleared all cache!");
+                              // Reload the app state
+                              await loadState();
+                              setState(() {});
+                            },
                           ),
                         ],
                       ),                      // Total items count (minimal display)
