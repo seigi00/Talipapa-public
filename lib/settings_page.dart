@@ -144,16 +144,7 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             ),
             
-            // Reset Data
-            ListTile(
-              title: Text(
-                "Reset Preferences",
-                style: TextStyle(fontSize: 18, color: textColor),
-              ),
-              onTap: () {
-                showResetConfirmationDialog();
-              },
-            ),
+            //Removed Reset Preferences
             ListTile(
               title: Text(
                 "View Tutorial",

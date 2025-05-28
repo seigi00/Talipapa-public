@@ -1768,7 +1768,6 @@ class _HomePageState extends State<HomePage> {
                             icon: Icon(Icons.star, color: kPink),
                             onPressed: showFavoritesDialog,
                           ),
-                    
                         ],
                       ),                      // Total items count (minimal display)
                       Container(
