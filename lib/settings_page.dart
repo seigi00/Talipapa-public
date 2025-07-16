@@ -13,10 +13,41 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
+  bool isFilipino = false; // Language toggle state
+  
   @override
   void initState() {
     super.initState();
-    // No settings to load initially
+    _loadLanguagePreference(); // Load language preference
+  }
+  
+  // Load language preference
+  Future<void> _loadLanguagePreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        isFilipino = prefs.getBool('isFilipino') ?? false;
+        AppLanguage.isFilipino = isFilipino; // Update global language setting
+      });
+      print("✅ Loaded language preference: ${isFilipino ? 'Filipino' : 'English'}");
+    } catch (e) {
+      print("❌ Error loading language preference: $e");
+    }
+  }
+  
+  // Save language preference
+  Future<void> _saveLanguagePreference(bool value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isFilipino', value);
+      setState(() {
+        isFilipino = value;
+        AppLanguage.isFilipino = value; // Update global language setting
+      });
+      print("✅ Saved language preference: ${value ? 'Filipino' : 'English'}");
+    } catch (e) {
+      print("❌ Error saving language preference: $e");
+    }
   }
   Future<void> resetData() async {
     final prefs = await SharedPreferences.getInstance();
@@ -117,7 +148,7 @@ class _SettingsPageState extends State<SettingsPage> {
         centerTitle: true,
         title: Center(
           child: Text(
-            "Settings",
+            AppLanguage.get('settings'),
             style: TextStyle(color: textColor, fontFamily: 'Raleway', fontSize: 24, fontWeight: FontWeight.bold),
           ),
         ),
@@ -133,7 +164,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ListTile(              title: Row(
                 children: [
                   Text(
-                    "Clear Cache",
+                    AppLanguage.get('clear_cache'),
                     style: TextStyle(fontSize: 18, color: kBlue),
                   ),
                   SizedBox(width: 8),
@@ -141,7 +172,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
               ),
               subtitle: Text(
-                "Warning: after clearing cache you still have to Manually Fetch Data to repopulate the list.",
+                AppLanguage.get('clear_cache_warning'),
                 style: TextStyle(fontSize: 12, color: kBlue.withOpacity(0.7)),
               ),
               onTap: () async {
@@ -150,7 +181,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 print("🧹 Cleared all cache!");
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text("Cache cleared successfully"),
+                    content: Text(AppLanguage.get('cache_cleared')),
                     backgroundColor: Colors.red[700],
                   ),
                 );
@@ -160,11 +191,11 @@ class _SettingsPageState extends State<SettingsPage> {
             // Manually Fetch Data
             ListTile(
               title: Text(
-                "Manually Fetch Data",
+                AppLanguage.get('manually_fetch'),
                 style: TextStyle(fontSize: 18, color: textColor),
               ),
               subtitle: Text(
-                "If the list or graph is not loading properly, manually fetch data to reset cache. This will increase time loading between pages.",
+                AppLanguage.get('fetch_description'),
                 style: TextStyle(fontSize: 12, color: textColor.withOpacity(0.7)),
               ),
               onTap: () {
@@ -172,10 +203,34 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             ),
             
+            // Language Toggle
+            ListTile(
+              title: Text(
+                AppLanguage.get('language'),
+                style: TextStyle(fontSize: 18, color: textColor),
+              ),
+              subtitle: Text(
+                isFilipino ? AppLanguage.get('filipino') : AppLanguage.get('english'),
+                style: TextStyle(fontSize: 12, color: textColor.withOpacity(0.7)),
+              ),
+              trailing: Switch(
+                value: isFilipino,
+                activeColor: kPink,  // Changed to kPink for better visibility
+                activeTrackColor: kPink.withOpacity(0.3),
+                inactiveThumbColor: kBlue,
+                inactiveTrackColor: kBlue.withOpacity(0.1),
+                onChanged: (bool value) {
+                  _saveLanguagePreference(value);
+                  // Rebuild this screen only to apply language changes
+                  setState(() {});
+                },
+              ),
+            ),
+            
             //Removed Reset Preferences
             ListTile(
               title: Text(
-                "View Tutorial",
+                AppLanguage.get('view_tutorial'),
                 style: TextStyle(fontSize: 18, color: textColor),
               ),
               onTap: () {

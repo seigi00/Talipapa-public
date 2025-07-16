@@ -63,7 +63,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      "Welcome to Talipapa!",
+                      AppLanguage.get('welcome'),
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
@@ -73,23 +73,16 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
                     SizedBox(height: 24),
                     ListTile(
                       leading: Icon(Icons.star, color: kPink),
-                      title: Text("Favorite Commodities", 
+                      title: Text(AppLanguage.get('favorite_commodities'), 
                         style: TextStyle(color: kBlue)),
-                      subtitle: Text("Tap the star icon to manage your favorites",
-                        style: TextStyle(color: kBlue)),
-                    ),
-                    ListTile(
-                      leading: Icon(Icons.add, color: kPink),
-                      title: Text("Add Commodities", 
-                        style: TextStyle(color: kBlue)),
-                      subtitle: Text("Use the add icon to manage displayed items",
+                      subtitle: Text(AppLanguage.get('tap_star'),
                         style: TextStyle(color: kBlue)),
                     ),
                     ListTile(
                       leading: Icon(Icons.touch_app, color: kBlue),
-                      title: Text("Select Items", 
+                      title: Text(AppLanguage.get('select_items'), 
                         style: TextStyle(color: kBlue)),
-                      subtitle: Text("Tap to select for price prediction",
+                      subtitle: Text(AppLanguage.get('tap_select'),
                         style: TextStyle(color: kBlue)),
                     ),
                     SizedBox(height: 24),
@@ -110,14 +103,14 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
                               activeColor: kPink,
                             ),
                             Text(
-                              "Don't show on launch",
+                              AppLanguage.get('dont_show'),
                               style: TextStyle(color: kBlue, fontSize: 12),
                             ),
                           ],
                         ),
                         TextButton(
                           onPressed: widget.onClose,
-                          child: Text("Close", style: TextStyle(color: kPink)),
+                          child: Text(AppLanguage.get('close'), style: TextStyle(color: kPink)),
                         ),
                       ],
                     ),

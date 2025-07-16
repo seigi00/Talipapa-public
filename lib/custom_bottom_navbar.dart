@@ -10,6 +10,11 @@ class CustomBottomNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Use translated tooltips for accessibility
+    final homeTooltip = AppLanguage.get('home');
+    final chatbotTooltip = AppLanguage.get('chatbot');
+    final settingsTooltip = AppLanguage.get('settings');
+    
     return SizedBox(
       height: 60, // Set your desired total height here (default is ~80)
       child: BottomAppBar(
@@ -25,18 +30,21 @@ class CustomBottomNavBar extends StatelessWidget {
               'assets/icons/ic_home.svg', 
               () => _navigateTo(context, HomePage()),
               20, // Reduced icon size
+              homeTooltip, // Pass tooltip text
             ),
             _buildNavIcon(
               context, 
               'assets/icons/ic_fishchatbot.svg', 
               () => _navigateTo(context, ChatbotPage()),
               20, // Reduced icon size
+              chatbotTooltip, // Pass tooltip text
             ),
             _buildNavIcon(
               context, 
               'assets/icons/ic_profile.svg', 
               () => _navigateTo(context, SettingsPage()),
               20, // Reduced icon size
+              settingsTooltip, // Pass tooltip text
             ),
           ],
         ),
@@ -44,7 +52,7 @@ class CustomBottomNavBar extends StatelessWidget {
     );
   }
   
-  Widget _buildNavIcon(BuildContext context, String iconPath, VoidCallback onPressed, double size) {
+  Widget _buildNavIcon(BuildContext context, String iconPath, VoidCallback onPressed, double size, String tooltip) {
     return IconButton(
       icon: SvgPicture.asset(
         iconPath,
@@ -55,6 +63,7 @@ class CustomBottomNavBar extends StatelessWidget {
       padding: EdgeInsets.all(8), // Reduce padding around icons
       constraints: BoxConstraints(), // Remove default constraints
       onPressed: onPressed,
+      tooltip: tooltip, // Add tooltip for accessibility
     );
   }
   

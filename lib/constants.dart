@@ -8,6 +8,127 @@ const kLightGray = Color(0xFFF9F9F9);
 const kAltGray = Color(0xFFF7F7F7);
 const kDivider = Color(0xFFEDEDED);
 
+// Language constants
+class AppLanguage {
+  static bool isFilipino = false; // Default to English
+  
+  // English text
+  static Map<String, String> english = {
+    'app_title': 'Talipapa',
+    'settings': 'Settings',
+    'home': 'Home',
+    'chatbot': 'Chatbot',
+    'clear_cache': 'Clear Cache',
+    'clear_cache_warning': 'Warning: after clearing cache you still have to Manually Fetch Data to repopulate the list.',
+    'cache_cleared': 'Cache cleared successfully',
+    'manually_fetch': 'Manually Fetch Data',
+    'fetch_description': 'If the list or graph is not loading properly, manually fetch data to reset cache. This will increase time loading between pages.',
+    'view_tutorial': 'View Tutorial',
+    'language': 'Language',
+    'english': 'English',
+    'filipino': 'Filipino',
+    'select_commodity': 'Select a Commodity',
+    'select_commodity_graph': 'Select a commodity to see price graph',
+    'favorites': 'Favorites',
+    'welcome': 'Welcome to Talipapa!',
+    'favorite_commodities': 'Favorite Commodities',
+    'tap_star': 'Tap the star icon to manage your favorites',
+    'select_items': 'Select Items',
+    'tap_select': 'Tap to select for price prediction',
+    'dont_show': "Don't show on launch",
+    'close': 'Close',
+    'see': 'See',
+    'last_week': 'Last Week',
+    'current': 'Current',
+    'next_week': 'Next Week',
+    'sort_by': 'Sort by',
+    'filter_by': 'Filter by',
+    // Chart translations
+    'updating_price_data': 'Updating price data...',
+    'latest_price_data': 'Latest Price Watch Data: {date}',
+    'forecast_next_week': 'Forecast Prices for Next Week',
+    'forecast_this_week': 'Forecasted Prices for this Week (Starting {date})',
+    'forecast_two_weeks': 'Forecast Prices for Two Weeks',
+    'source_da': 'Source: Department of Agriculture',
+    'source_forecast': 'Source: Talipapa Forecast',
+    'chart_last': 'Last',
+    'chart_current': 'Current',
+    'chart_next_week': 'Next Wk',
+    'price_trend': 'Price Trend',
+    'insufficient_data': 'Graph disabled - Insufficient data available',
+    'no_price_data': 'No price data available',
+    'no_actual_price_data': 'No actual price data available',
+    'latest_price': 'Latest price',
+    'as_of': 'As of',
+    'total': 'Total',
+  };
+  
+  // Filipino text
+  static Map<String, String> filipino = {
+    'app_title': 'Talipapa',
+    'settings': 'Mga Setting',
+    'home': 'Home',
+    'chatbot': 'Chatbot',
+    'clear_cache': 'Burahin ang Cache',
+    'clear_cache_warning': 'Babala: pagkatapos burahin ang cache, kailangan mong i-click ang "I-refresh ang Data" para muling mapuno ang listahan.',
+    'cache_cleared': 'Matagumpay na nabura ang cache',
+    'manually_fetch': 'I-refresh ang Data',
+    'fetch_description': 'Kung hindi naglo-load nang maayos ang listahan o graph, i-refresh ang data para mareset ang cache. Disklaimer: magtatagal ang loading ng mga pahina.',
+    'view_tutorial': 'Tingnan ang Tutorial',
+    'language': 'Wika',
+    'english': 'Ingles',
+    'filipino': 'Filipino',
+    'select_commodity': 'Pumili ng Produkto',
+    'select_commodity_graph': 'Pumili ng produkto upang makita ang graph',
+    'favorites': 'Mga Paborito',
+    'welcome': 'Maligayang pagdating sa Talipapa!',
+    'favorite_commodities': 'Mga Paboritong Produkto',
+    'tap_star': 'I-tap ang icon ng bituin para pamahalaan ang iyong mga paborito',
+    'select_items': 'Pumili ng mga Item',
+    'tap_select': 'I-tap para piliin para sa paghula ng presyo',
+    'dont_show': 'Huwag ipakita sa pagbukas',
+    'close': 'Isara',
+    'see': 'Tingnan',
+    'last_week': 'Nakaraang Linggo',
+    'current': 'Ngayon',
+    'next_week': 'Susunod na Linggo',
+    'sort_by': 'I-sort',
+    'filter_by': 'I-filter',
+    // Chart translations
+    'updating_price_data': 'Ina-update ang datos ng presyo...',
+    'latest_price_data': 'Pinakabagong Datos ng Presyo: {date}',
+    'forecast_next_week': 'Inaasahang Presyo sa Susunod na Linggo',
+    'forecast_this_week': 'Inaasahang Presyo para sa Linggong Ito (Simula {date})',
+    'forecast_two_weeks': 'Inaasahang Presyo sa Susunod na Dalawang Linggo',
+    'source_da': 'Pinagkunan: Kagawaran ng Agrikultura',
+    'source_forecast': 'Pinagkunan: Talipapa Forecast',
+    'chart_last': 'Dati',
+    'chart_current': 'Ngayon',
+    'chart_next_week': 'Susunod',
+    'price_trend': 'Trend ng Presyo',
+    'insufficient_data': 'Graph hindi magagamit - Kulang ang datos',
+    'no_price_data': 'Walang datos ng presyo',
+    'no_actual_price_data': 'Walang aktwal na datos ng presyo',
+    'latest_price': 'Pinakabagong presyo',
+    'as_of': 'Hanggang',
+    'total': 'Kabuuang',
+  };
+  
+  // Get text based on current language with improved error handling
+  static String get(String key) {
+    try {
+      if (isFilipino) {
+        return filipino[key] ?? english[key] ?? key;
+      } else {
+        return english[key] ?? key;
+      }
+    } catch (e) {
+      print("⚠️ Error getting language text for key '$key': $e");
+      return key;
+    }
+  }
+}
+
 // Commodity display mapping (UUID-based)
 // Update COMMODITY_ID_TO_DISPLAY to use the category directly (no separate type field)
 

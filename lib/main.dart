@@ -991,27 +991,32 @@ class _HomePageState extends State<HomePage> {
                 Container(
                   width: double.infinity,
                   color: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: EdgeInsets.symmetric(horizontal: 32, vertical: 8), // Increased horizontal padding for longer text
                   alignment: Alignment.center,
                   child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center, // Ensure center alignment
+                    crossAxisAlignment: CrossAxisAlignment.center, // Ensure center alignment
                     children: [
                       Text(
                         globalPriceDate.isEmpty 
-                            ? "Updating price data..." 
+                            ? AppLanguage.get('updating_price_data') 
                             : selectedForecast == "Now"
-                                ? "Latest Price Watch Data: $globalPriceDate"
+                                ? AppLanguage.get('latest_price_data').replaceAll('{date}', globalPriceDate)
                                 : selectedForecast == "Next Week"
                                     ? forecastStartDate.isEmpty
-                                        ? "Forecast Prices for Next Week"
-                                        : "Forecasted Prices for this Week (Starting $forecastStartDate)"
+                                        ? AppLanguage.get('forecast_next_week')
+                                        : AppLanguage.get('forecast_this_week').replaceAll('{date}', forecastStartDate)
                                     : forecastStartDate.isEmpty
-                                        ? "Forecast Prices for Two Weeks"
-                                        : "Forecasted Prices for Next Week (Starting $forecastStartDate)",
+                                        ? AppLanguage.get('forecast_two_weeks')
+                                        : AppLanguage.get('forecast_this_week').replaceAll('{date}', forecastStartDate),
                         style: TextStyle(
                           color: kBlue,
-                          fontSize: 12,
+                          fontSize: 11, // Slightly smaller font size for longer text
                           fontWeight: FontWeight.w500,
                         ),
+                        textAlign: TextAlign.center, // Ensure text is centered
+                        overflow: TextOverflow.visible, // Allow text to break to multiple lines if needed
+                        softWrap: true, // Ensure text wraps properly
                       ),
                       SizedBox(height: 4),
                       // Source indicator with styling based on forecast type
@@ -1031,8 +1036,8 @@ class _HomePageState extends State<HomePage> {
                         ),
                         child: Text(
                           selectedForecast == "Now" 
-                              ? "Source: Department of Agriculture" 
-                              : "Source: Talipapa Forecast",
+                              ? AppLanguage.get('source_da')
+                              : AppLanguage.get('source_forecast'),
                           style: TextStyle(
                             fontWeight: FontWeight.w500,
                             fontSize: 11,
@@ -1068,9 +1073,9 @@ class _HomePageState extends State<HomePage> {
                           ),
                     
                         ),                            child: selectedCommodityId == null
-                            ? Center(child: Text("Select a commodity to see price graph"))
+                            ? Center(child: Text(AppLanguage.get('select_commodity_graph')))
                             : _hasInsufficientData(selectedCommodityId!)
-                            ? Center(child: Text("Graph disabled - Insufficient data available",
+                            ? Center(child: Text(AppLanguage.get('insufficient_data'),
                                 style: TextStyle(fontSize: 14, color: Colors.grey)))
                             : FutureBuilder<List<Map<String, dynamic>>>(
                                 future: firestoreService.fetchWeeklyPrices(selectedCommodityId!),
@@ -1082,7 +1087,7 @@ class _HomePageState extends State<HomePage> {
                                   if (!snapshot.hasData || snapshot.data!.isEmpty) {
                                     return Center(
                                       child: Text(
-                                        "No price data available",
+                                        AppLanguage.get('no_price_data'),
                                         style: TextStyle(fontSize: 14, color: Colors.grey),
                                       )
                                     );
@@ -1098,7 +1103,7 @@ class _HomePageState extends State<HomePage> {
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
                                         Text(
-                                          "No actual price data available",
+                                          AppLanguage.get('no_actual_price_data'),
                                           style: TextStyle(fontSize: 14, color: Colors.grey),
                                         ),
                                         Padding(
@@ -1106,7 +1111,7 @@ class _HomePageState extends State<HomePage> {
                                           child: Column(
                                             children: [
                                               Text(
-                                                "Latest price: -",
+                                                "${AppLanguage.get('latest_price')}: -",
                                                 style: TextStyle(
                                                   fontSize: 16,
                                                   color: kBlue,
@@ -1115,7 +1120,7 @@ class _HomePageState extends State<HomePage> {
                                               ),
                                               SizedBox(height: 4),
                                               Text(
-                                                "As of: -",
+                                                "${AppLanguage.get('as_of')}: -",
                                                 style: TextStyle(
                                                   fontSize: 12,
                                                   color: kBlue,
@@ -1525,7 +1530,7 @@ class _HomePageState extends State<HomePage> {
                                         child: Column(
                                           children: [
                                             Text(
-                                              "Price Trend",
+                                              AppLanguage.get('price_trend'),
                                               style: TextStyle(
                                                 fontSize: 13, // Reduced from 13
                                                 color: kBlue,
@@ -1615,7 +1620,7 @@ class _HomePageState extends State<HomePage> {
                       SizedBox(height: 16),
                       Row(
                         children: [                          Text(
-                            "See:",
+                            AppLanguage.get('see') + ":",
                             style: TextStyle(
                               fontFamily: 'Raleway',
                               fontWeight: FontWeight.bold,
@@ -1629,11 +1634,11 @@ class _HomePageState extends State<HomePage> {
                               scrollDirection: Axis.horizontal,
                               child: Row(
                                 children: [
-                                  _forecastButton("Now", displayText: "Last Week"),
+                                  _forecastButton("Now", displayText: AppLanguage.get('last_week')),
                                   SizedBox(width: 8), // Reduced spacing between buttons
-                                  _forecastButton("Next Week", displayText: "Current"),
+                                  _forecastButton("Next Week", displayText: AppLanguage.get('current')),
                                   SizedBox(width: 8), // Reduced spacing between buttons
-                                  _forecastButton("Two Weeks", displayText: "Next Week"),
+                                  _forecastButton("Two Weeks", displayText: AppLanguage.get('next_week')),
                                 ],
                               ),
                             ),
@@ -1648,7 +1653,7 @@ class _HomePageState extends State<HomePage> {
                             flex: 1,                            child: DropdownButton<String>(
                               value: selectedSort == "None" ? null : selectedSort,
                               hint: Text(
-                                "Sort by",
+                                AppLanguage.get('sort_by'),
                                 style: TextStyle(
                                   fontWeight: FontWeight.w500,
                                   color: kBlue,
@@ -1702,7 +1707,7 @@ class _HomePageState extends State<HomePage> {
                             flex: 1,                            child: DropdownButton<String>(
                               value: selectedFilter == "None" ? null : selectedFilter,
                               hint: Text(
-                                "Filter by",
+                                AppLanguage.get('filter_by'),
                                 style: TextStyle(
                                   fontWeight: FontWeight.w500,
                                   color: kBlue,
@@ -1778,7 +1783,7 @@ class _HomePageState extends State<HomePage> {
                         padding: const EdgeInsets.only(top: 2.0, right: 8.0),
                         alignment: Alignment.centerRight,
                         child: Text(
-                          "Total: ${displayedCommodities.length}",
+                          "${AppLanguage.get('total')}: ${displayedCommodities.length}",
                           style: TextStyle(
                             fontSize: 8,
                             color: const Color.fromARGB(255, 131, 131, 131),
@@ -2431,7 +2436,7 @@ class _HomePageState extends State<HomePage> {
                                 : "";
                               return CheckboxListTile(
                               title: Text(
-                                displayName + specification,
+                                "$displayName$specification",
                                 style: TextStyle(fontSize: 14),
                               ),
                               dense: true,
