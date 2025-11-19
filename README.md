@@ -1,6 +1,9 @@
 # Talipapa
 
-A new Flutter project.
+Talipapa is a Flutter-based mobile application that forecasts commodity prices in the Philippines for 2 weeks using the SARIMA algorithm.
+Utilizing web-scraping techniques to scrape the past week's commodity price data from the Department of Agriculture's (DA) PriceWatch website, 
+and a sophisticated combination of time-series algorithms, Talipapa delivers a timely and accurate prediction for wet market vendors and consumers. 
+It also features interactive graphs and a chatbot that's geared to both English and Tagalog to facilitate user understanding. 
 
 ## Getting Started
 
